@@ -17,7 +17,9 @@ const STYLES = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: none;
 }
+.panel > * { pointer-events: auto; }
 .card {
   background: #ffffff;
   border: 1px solid #d7dee7;
@@ -46,11 +48,20 @@ button {
   cursor: pointer;
   font-weight: 600;
 }
-button.primary { background: #154ab8; color: #fff; }
-button.primary:hover { background: #123f9c; }
+button.primary { background: #0d6e6a; color: #fff; }
+button.primary:hover { background: #0a5855; }
 button.secondary { background: #eef1f6; color: #0f1419; }
 button.secondary:hover { background: #e2e7ef; }
 button.link { background: transparent; color: #46525f; padding: 7px 4px; }
+button.danger {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  padding: 10px 18px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+button.danger:hover { background: rgba(255, 255, 255, 0.12); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #eef1f6; font-size: 11px; margin-left: 6px; }
 .card pre {
   margin: 0 0 10px;
@@ -67,6 +78,131 @@ button.link { background: transparent; color: #46525f; padding: 7px 4px; }
 .roots { margin: 0 0 10px; padding-left: 18px; color: #46525f; font-size: 12px; }
 .roots li { margin: 0 0 4px; }
 .error p { color: #9c2b2b; }
+
+/* ---- Compact working card (chat stays visible) ---- */
+.veil {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
+  max-width: calc(100vw - 32px);
+}
+.veil.visible { display: flex; }
+.working-box {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  width: min(340px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% 0%, rgba(232, 93, 76, 0.35), transparent 55%),
+    rgba(14, 24, 26, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.orbit {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+.orbit-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+}
+.orbit-ring.r2 { inset: 7px; border-color: rgba(43, 181, 174, 0.35); }
+.orbit-ring.r3 { inset: 14px; border-color: rgba(240, 163, 90, 0.4); }
+.orbit-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #f0a35a;
+  box-shadow: 0 0 10px rgba(240, 163, 90, 0.8);
+  animation: orbit-spin 1.6s linear infinite;
+}
+.orbit-dot.d2 {
+  background: #2bb5ae;
+  box-shadow: 0 0 10px rgba(43, 181, 174, 0.8);
+  animation: orbit-spin-inner 2.2s linear infinite reverse;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+}
+.orbit-core {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #e85d4c, #f0a35a 55%, #2bb5ae);
+  box-shadow: 0 0 18px rgba(232, 93, 76, 0.45);
+  animation: core-pulse 1.4s ease-in-out infinite;
+}
+@keyframes orbit-spin {
+  from { transform: rotate(0deg) translateX(22px); }
+  to { transform: rotate(360deg) translateX(22px); }
+}
+@keyframes orbit-spin-inner {
+  from { transform: rotate(0deg) translateX(14px); }
+  to { transform: rotate(360deg) translateX(14px); }
+}
+@keyframes core-pulse {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.08); filter: brightness(1.15); }
+}
+.working-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
+  line-height: 1;
+}
+.working-title .dot {
+  display: inline-block;
+  width: 0.28em;
+  opacity: 0;
+  animation: blink-dot 1.4s infinite;
+}
+.working-title .dot:nth-child(1) { animation-delay: 0s; }
+.working-title .dot:nth-child(2) { animation-delay: 0.2s; }
+.working-title .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink-dot {
+  0%, 20% { opacity: 0; }
+  30%, 70% { opacity: 1; }
+  80%, 100% { opacity: 0; }
+}
+.working-detail {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+.working-hint {
+  margin: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
 `;
 
 export interface DetectionPromptCallbacks {
@@ -87,6 +223,11 @@ export interface ToolResultCallbacks {
   onDiscard: () => void;
 }
 
+export interface WorkingOptions {
+  detail?: string;
+  onCancel?: () => void;
+}
+
 /**
  * Minimal, dependency-free in-page overlay rendered in a shadow root so
  * host-page CSS can never bleed in (or be leaked into). Only one card is
@@ -97,8 +238,13 @@ export class SuggestionOverlay {
   private readonly host: HTMLElement;
   private readonly shadow: ShadowRoot;
   private readonly panel: HTMLDivElement;
+  private readonly veil: HTMLDivElement;
+  private readonly workingDetail: HTMLParagraphElement;
+  private readonly cancelButton: HTMLButtonElement;
   /** True while Run/Decline or Insert/Discard is on screen — don't clobber it. */
   private blocking = false;
+  private working = false;
+  private onCancel: (() => void) | null = null;
 
   constructor(doc: Document = document) {
     this.host = doc.getElementById(HOST_ID) ?? doc.createElement('div');
@@ -111,6 +257,43 @@ export class SuggestionOverlay {
     const style = doc.createElement('style');
     style.textContent = STYLES;
     this.shadow.appendChild(style);
+
+    this.veil = doc.createElement('div');
+    this.veil.className = 'veil';
+    this.veil.setAttribute('role', 'status');
+    this.veil.setAttribute('aria-live', 'polite');
+    this.veil.setAttribute('aria-label', 'Local Context Bridge working');
+    this.veil.innerHTML = `
+      <div class="working-box">
+        <div class="orbit" aria-hidden="true">
+          <div class="orbit-ring"></div>
+          <div class="orbit-ring r2"></div>
+          <div class="orbit-ring r3"></div>
+          <div class="orbit-core"></div>
+          <div class="orbit-dot"></div>
+          <div class="orbit-dot d2"></div>
+        </div>
+        <p class="working-title">WORKING<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></p>
+        <p class="working-detail"></p>
+        <p class="working-hint">You can still read the chat — Cancel stops the bridge.</p>
+        <button type="button" class="danger" data-cancel>Cancel</button>
+      </div>
+    `;
+    this.workingDetail = this.veil.querySelector('.working-detail')!;
+    this.cancelButton = this.veil.querySelector('[data-cancel]')!;
+    this.cancelButton.addEventListener('click', () => {
+      const cb = this.onCancel;
+      this.clearWorking();
+      cb?.();
+    });
+    this.veil.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelButton.click();
+      }
+    });
+    this.shadow.appendChild(this.veil);
 
     this.panel = doc.createElement('div');
     this.panel.className = 'panel';
@@ -126,12 +309,52 @@ export class SuggestionOverlay {
     return this.blocking;
   }
 
+  isWorking(): boolean {
+    return this.working;
+  }
+
+  /**
+   * Compact floating “WORKING” card (chat stays readable and clickable).
+   * Does not set `blocking` — tool scans can still proceed.
+   */
+  showWorking(detail: string, options: WorkingOptions = {}): void {
+    this.working = true;
+    this.onCancel = options.onCancel ?? null;
+    this.workingDetail.textContent = detail || options.detail || 'Local Context Bridge is working…';
+    this.cancelButton.hidden = !this.onCancel;
+    this.veil.classList.add('visible');
+  }
+
+  updateWorking(detail: string): void {
+    if (!this.working) return;
+    this.workingDetail.textContent = detail;
+  }
+
+  clearWorking(): void {
+    this.working = false;
+    this.onCancel = null;
+    this.veil.classList.remove('visible');
+  }
+
+  /**
+   * Temporarily hide the veil (without dropping the cancel handler) so Lexical
+   * can receive focus / Send clicks. Call {@link showWorking} again afterward.
+   */
+  unlockForComposer(): void {
+    this.veil.classList.remove('visible');
+  }
+
+  relockWorking(): void {
+    if (this.working) this.veil.classList.add('visible');
+  }
+
   showDetectionPrompt(
     projectAlias: string,
     roots: CompanionStatusRoot[],
     callbacks: DetectionPromptCallbacks,
     readiness: 'ready' | 'needs-companion' | 'needs-pairing' | 'needs-folder' = 'ready',
   ): void {
+    this.clearWorking();
     this.clear();
     const card = document.createElement('div');
     card.className = 'card';
@@ -208,6 +431,8 @@ export class SuggestionOverlay {
     projectAlias: string,
     callbacks: PendingToolCallCallbacks,
   ): void {
+    // Approval needs clicks — drop the working veil so the card is usable.
+    this.clearWorking();
     this.clear();
     this.blocking = true;
     const argsPreview = formatArgsPreview(request.arguments);
@@ -243,6 +468,7 @@ export class SuggestionOverlay {
   }
 
   showToolResultConfirmation(result: LocalToolResult, callbacks: ToolResultCallbacks): void {
+    this.clearWorking();
     this.clear();
     this.blocking = true;
     const card = document.createElement('div');
@@ -270,6 +496,7 @@ export class SuggestionOverlay {
 
   /** When the host chat composer cannot be located, let the user paste bootstrap manually. */
   showBootstrapManual(bootstrapMessage: string): void {
+    this.clearWorking();
     this.clear();
     const card = document.createElement('div');
     card.className = 'card';
@@ -295,26 +522,42 @@ export class SuggestionOverlay {
   }
 
   /** Sticky status while waiting for Copilot to put the chat id in the URL. */
-  showSetupProgress(message: string): void {
-    // Don't use blocking — tool approvals / scans must still work during this wait.
-    this.panel.innerHTML = '';
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `
-      <h3>Setup in progress</h3>
-      <p class="note"><strong>Local Context Bridge</strong> is finishing session setup.</p>
-      <p>${escapeHtml(message)}</p>
-    `;
-    this.panel.appendChild(card);
+  showSetupProgress(message: string, onCancel?: () => void): void {
+    this.clear();
+    this.showWorking(message, { onCancel });
   }
 
   clearSetupProgress(): void {
+    this.clearWorking();
+    if (!this.blocking) this.clear();
+  }
+
+  /**
+   * Bottom card when auto-Send fails — composer stays usable (no full veil).
+   */
+  showBootstrapSendFailed(
+    _bootstrapMessage: string,
+    callbacks: { onRetry: () => void; onCancel: () => void },
+  ): void {
+    this.clearWorking();
     this.clear();
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <h3>Could not auto-send</h3>
+      <p>The setup message may be in the composer. Click <strong>Send</strong> in Copilot, or retry.</p>
+      <div class="row"></div>
+    `;
+    const row = card.querySelector('.row')!;
+    row.appendChild(makeButton('Retry send', 'primary', callbacks.onRetry));
+    row.appendChild(makeButton('Cancel', 'secondary', callbacks.onCancel));
+    this.panel.appendChild(card);
   }
 
   showTransientNotice(message: string, kind: 'info' | 'error' = 'info', timeoutMs = 6000): void {
     // Never replace an active Run / Insert confirmation — rescans were wiping it.
     if (this.blocking) return;
+    this.clearWorking();
     this.clear();
     const card = document.createElement('div');
     card.className = kind === 'error' ? 'card error' : 'card';

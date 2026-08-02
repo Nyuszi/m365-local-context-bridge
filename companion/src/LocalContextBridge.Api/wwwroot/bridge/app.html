@@ -4,14 +4,21 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Local Context Bridge</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/bridge/icons/icon-32.png"/>
+  <link rel="icon" type="image/png" sizes="48x48" href="/bridge/icons/icon-48.png"/>
+  <link rel="icon" type="image/png" sizes="128x128" href="/bridge/icons/icon-128.png"/>
+  <link rel="apple-touch-icon" href="/bridge/icons/apple-touch-icon.png"/>
   <link rel="stylesheet" href="/bridge/styles.css"/>
 </head>
 <body>
 <main>
   <div class="top">
-    <div>
-      <h1>Local Context Bridge</h1>
-      <p class="muted">Desktop status</p>
+    <div class="brand">
+      <img class="brand-mark" src="/bridge/icons/icon-128.png" width="52" height="52" alt=""/>
+      <div>
+        <h1>Local Context Bridge</h1>
+        <p class="muted">Desktop status</p>
+      </div>
     </div>
     <div class="theme-switch">
       <button type="button" data-theme-set="system">Auto</button>
@@ -275,21 +282,82 @@ async function refresh() {
             <div class="title">${escapeHtml(sessionLabel(s))}</div>
             <div class="sub">${escapeHtml(s.projectAlias || 'project')} · <span class="pill">${escapeHtml(pillLabel)}</span>${when ? ` · ${escapeHtml(when)}` : ''}</div>
           </div>
-          <button class="secondary resume" type="button">${linked ? 'Open' : 'New chat…'}</button>
+          <div class="session-actions">
+            <button class="secondary resume" type="button">${linked ? 'Open' : 'New chat…'}</button>
+            <button class="danger delete" type="button">Delete</button>
+          </div>
         </div>`;
       })
       .join('');
     list.querySelectorAll('.session-item').forEach((row) => {
+      const id = decodeURIComponent(row.getAttribute('data-id'));
+      const s = sessions.find((x) => x.chatId === id);
       row.querySelector('.resume').onclick = () => {
-        const id = decodeURIComponent(row.getAttribute('data-id'));
-        const s = sessions.find((x) => x.chatId === id);
         void openSession(s);
+      };
+      row.querySelector('.delete').onclick = () => {
+        void confirmDeleteSession(s);
       };
     });
   } catch {
     document.getElementById('sessionList').innerHTML =
       '<p class="muted">Could not load sessions.</p>';
   }
+}
+
+async function confirmDeleteSession(session) {
+  if (!session) return;
+  const label = sessionLabel(session);
+  const ok = await showConfirm({
+    title: 'Delete session?',
+    body: `Remove “${label}” from previous sessions? This cannot be undone.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await deleteSession(session.chatId);
+    await refresh();
+  } catch (e) {
+    window.alert(e.message || 'Could not delete session');
+  }
+}
+
+function showConfirm({ title, body, confirmLabel = 'Confirm', danger = false }) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('confirmModal');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'confirmModal';
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h3 id="confirmTitle">${escapeHtml(title)}</h3>
+        <p>${escapeHtml(body)}</p>
+        <div class="modal-actions">
+          <button type="button" class="secondary" data-cancel>Cancel</button>
+          <button type="button" class="${danger ? 'danger-solid' : 'primary'}" data-confirm>${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const finish = (value) => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') finish(false);
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('[data-cancel]').onclick = () => finish(false);
+    overlay.querySelector('[data-confirm]').onclick = () => finish(true);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finish(false);
+    });
+    overlay.querySelector('[data-confirm]').focus();
+  });
 }
 
 function escapeHtml(s) {

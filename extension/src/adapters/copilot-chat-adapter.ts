@@ -216,16 +216,14 @@ export class CopilotChatAdapter implements SiteAdapter {
       el.querySelector('[data-testid="copilot-message-reply-div"]') ??
       el;
     const fromContent = reconstructMarkdownFromDom(content);
-    // If the content wrapper missed a code box sitting as a sibling, prefer the
-    // full message reconstruction when it actually contains a tool request.
-    if (
-      content !== el &&
-      !/"type"\s*:\s*"LOCAL_TOOL_REQUEST"/.test(fromContent) &&
-      /LOCAL_TOOL_REQUEST/.test((el as HTMLElement).innerText || '')
-    ) {
-      return reconstructMarkdownFromDom(el);
-    }
-    return fromContent;
+    if (/"type"\s*:\s*"LOCAL_TOOL_REQUEST"/.test(fromContent)) return fromContent;
+
+    // Code boxes sometimes sit outside the markdown content wrapper, or keep
+    // the JSON body in an open shadow root (host innerText then looks empty).
+    const fromMessage = reconstructMarkdownFromDom(el);
+    if (/"type"\s*:\s*"LOCAL_TOOL_REQUEST"/.test(fromMessage)) return fromMessage;
+
+    return fromContent.length >= fromMessage.length ? fromContent : fromMessage;
   }
 
   isMessageStreaming(el: Element): boolean {
@@ -334,33 +332,41 @@ export class CopilotChatAdapter implements SiteAdapter {
    */
   async insertAndSubmit(composer: HTMLElement, text: string): Promise<boolean> {
     const doc = composer.ownerDocument;
-    this.setComposerText(composer, text);
-    await new Promise((r) => setTimeout(r, 250));
+    let active = this.getComposer(doc) ?? composer;
+    active.focus();
+    this.setComposerText(active, text);
+    await new Promise((r) => setTimeout(r, 400));
 
     let clicked = false;
-    for (let attempt = 0; attempt < 24; attempt += 1) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      active = this.getComposer(doc) ?? active;
       const button = queryFirstVisible<HTMLElement>(doc, CopilotChatAdapter.SEND_BUTTON_SELECTORS);
-      if (button && (this.isSendEnabled(button) || attempt >= 10)) {
+      if (button && (this.isSendEnabled(button) || attempt >= 12)) {
         if (!clicked) {
+          active.focus();
           button.click();
           clicked = true;
         }
-        await new Promise((r) => setTimeout(r, 180));
-        const remaining = (composer.textContent || '').trim();
+        await new Promise((r) => setTimeout(r, 200));
+        const remaining = (active.textContent || '').trim();
         if (!remaining || remaining.length < Math.min(40, text.length / 4)) {
           return true;
         }
-        // Already clicked once — wait for clear; do not click/Enter again.
+        // Click didn't clear — allow one more click after a pause (Lexical flakiness).
+        if (attempt === 18 && clicked) {
+          clicked = false;
+        }
         continue;
       }
       await new Promise((r) => setTimeout(r, 120));
     }
 
     if (!clicked) {
-      return this.submit(doc, composer);
+      return this.submit(doc, this.getComposer(doc) ?? active);
     }
-    // Clicked once but composer didn't clear — still treat as sent to avoid double-send.
-    return true;
+    // Clicked but composer still has text — report failure so caller can retry / prompt.
+    const remaining = ((this.getComposer(doc) ?? active).textContent || '').trim();
+    return !remaining || remaining.length < Math.min(40, text.length / 4);
   }
 
   getConversationId(doc: Document): string | null {

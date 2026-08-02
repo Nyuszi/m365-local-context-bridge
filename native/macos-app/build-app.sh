@@ -54,6 +54,14 @@ fi
 # Fix ROOT detection: bridge-macos.sh uses dirname/../.. from scripts/ → Resources is ROOT. Good.
 # nm-host.sh looks for ROOT/scripts/bridge-macos.sh — with Resources as ROOT that works.
 
+# App icon (Dock / Finder / Launchpad)
+ICON_ICNS="${ROOT}/branding/icons/AppIcon.icns"
+if [[ -f "$ICON_ICNS" ]]; then
+  cp "$ICON_ICNS" "${RESOURCES}/AppIcon.icns"
+else
+  echo "WARNING: missing ${ICON_ICNS} — app will use the default document icon" >&2
+fi
+
 cat >"${APP_ROOT}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,6 +75,8 @@ cat >"${APP_ROOT}/Contents/Info.plist" <<EOF
   <string>Local Context Bridge</string>
   <key>CFBundleDisplayName</key>
   <string>Local Context Bridge</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

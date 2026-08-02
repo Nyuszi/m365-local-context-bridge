@@ -1,4 +1,55 @@
 /**
+ * Collect text from a node tree, descending into open shadow roots.
+ * Copilot's scriptor highlighter sometimes keeps the real code body in a
+ * shadow tree — host `innerText` then misses `LOCAL_TOOL_REQUEST` entirely.
+ */
+export function deepCollectText(root: Element | ShadowRoot | DocumentFragment): string {
+  const parts: string[] = [];
+
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '');
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    if (node.shadowRoot) {
+      for (const child of Array.from(node.shadowRoot.childNodes)) visit(child);
+    }
+    for (const child of Array.from(node.childNodes)) visit(child);
+  };
+
+  // Host elements often keep the real code body in their own shadow root.
+  if (root instanceof Element && root.shadowRoot) {
+    for (const child of Array.from(root.shadowRoot.childNodes)) visit(child);
+  }
+  for (const child of Array.from(root.childNodes)) visit(child);
+  return parts.join('');
+}
+
+/** Best-effort code body from a scriptor / pre block (light DOM, attrs, shadow). */
+export function extractCodeBlockRawText(node: Element): string {
+  const attrHits = [
+    node.getAttribute('data-code'),
+    node.getAttribute('data-clipboard-text'),
+    node.getAttribute('data-value'),
+    node.querySelector('[data-clipboard-text]')?.getAttribute('data-clipboard-text'),
+    node.querySelector('textarea')?.value,
+  ];
+  for (const hit of attrHits) {
+    if (hit && /LOCAL_TOOL_REQUEST|"protocolVersion"\s*:/.test(hit)) return hit;
+  }
+
+  const inner = (node as HTMLElement).innerText || node.textContent || '';
+  if (/LOCAL_TOOL_REQUEST/.test(inner) || /"protocolVersion"\s*:\s*"1\.0"/.test(inner)) {
+    return inner;
+  }
+
+  const deep = deepCollectText(node);
+  if (deep.length > inner.length) return deep;
+  return inner || deep;
+}
+
+/**
  * Copilot's virtualized code box interleaves gutter line numbers and a language
  * badge, e.g. `Dart\n1\n{\n2\n  "type": "LOCAL_TOOL_REQUEST"\n...`.
  * Strip those before treating the body as JSON/markdown.
@@ -90,7 +141,7 @@ export function reconstructMarkdownFromDom(root: Element): string {
       node.querySelector('[id*="language" i]')?.textContent?.trim() ||
       '';
     let lang = normalizeBadgeLang(badge);
-    const body = stripCopilotCodeGutter((node as HTMLElement).innerText || node.textContent || '');
+    const body = stripCopilotCodeGutter(extractCodeBlockRawText(node));
     lang = protocolLangFromBody(body, lang);
     parts.push(`\n\`\`\`${lang}\n${body}\n\`\`\`\n`);
   }
@@ -122,7 +173,7 @@ export function reconstructMarkdownFromDom(root: Element): string {
     if (tag === 'pre') {
       const codeEl = node.querySelector('code') ?? node;
       let lang = extractLanguage(codeEl);
-      const code = (codeEl.textContent ?? '').replace(/\n+$/, '');
+      const code = extractCodeBlockRawText(codeEl).replace(/\n+$/, '');
       lang = protocolLangFromBody(code, lang);
       parts.push(`\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
       return;

@@ -8,16 +8,18 @@ Everything runs **locally** except Copilot itself in Chrome.
 
 ## Install (macOS) — 3 steps
 
-### 1. Start the app
+### 1. Install the Mac app (once)
 
-Double-click **`Local Context Bridge.app`**.
+**Option A — double-click (easiest)**  
+**`installer.command`**
 
-- First run opens setup.
-- Later runs open the status window (`/app`).
+**Option B — Terminal**
 
-> Build the app once from this repo (Apple Silicon):  
-> `./scripts/sync-native.sh --app`  
-> then open `packaging/out/Local Context Bridge.app`
+```bash
+./scripts/install-macos-app.sh
+```
+
+After that, start it anytime from **Launchpad**, **Spotlight**, or **Applications → Local Context Bridge**.
 
 ### 2. Add the Chrome extension (once)
 

@@ -1,5 +1,5 @@
 import { isAdapterUsable, selectAdapter, type SiteAdapter } from '../adapters';
-import { reconstructMarkdownFromDom, stripCopilotCodeGutter } from '../adapters/markdown';
+import { reconstructMarkdownFromDom, stripCopilotCodeGutter, extractCodeBlockRawText, deepCollectText } from '../adapters/markdown';
 import type {
   BackgroundToContentMessage,
   ContentToBackgroundMessage,
@@ -35,12 +35,14 @@ function preview(text: string, max = 160): string {
 
 /** True when text likely contains a protocol payload (not ordinary chat prose). */
 function looksLikeToolPayload(text: string): boolean {
-  return /LOCAL_TOOL_REQUEST/.test(text);
+  if (/LOCAL_TOOL_REQUEST/.test(text)) return true;
+  // Copilot "Plain Text" blocks still carry the JSON shape.
+  return /"protocolVersion"\s*:\s*"1\.0"/.test(text) && /"tool"\s*:\s*"[a-z_]+"/.test(text);
 }
 
 /**
  * Parse tool requests from reconstructed DOM text / innerText / code boxes.
- * Only wrap prose in a synthetic fence when LOCAL_TOOL_REQUEST is already present —
+ * Only wrap prose in a synthetic fence when a tool payload is already present —
  * otherwise wrapping every Copilot reply yields false `invalid-json` rejections.
  */
 function parseLooseToolText(text: string): ParseOutcome {
@@ -61,6 +63,13 @@ function parseLooseToolText(text: string): ParseOutcome {
   if (outcome.kind === 'rejected') return outcome;
   if (wrapped.kind === 'rejected') return wrapped;
   return { kind: 'none' };
+}
+
+/** Code block looks like JSON tool call even without the type string visible yet. */
+function looksLikeJsonToolBlock(text: string): boolean {
+  const t = stripCopilotCodeGutter(text).trim();
+  if (!t.includes('{')) return false;
+  return /"tool"\s*:/.test(t) && (/protocolVersion/.test(t) || /LOCAL_TOOL/.test(t) || /arguments/.test(t));
 }
 
 const CODE_BLOCK_SELECTOR = [
@@ -121,9 +130,14 @@ function preferOutcome(current: ParseOutcome, next: ParseOutcome): ParseOutcome 
 function parseToolRequestFromMessage(adapter: SiteAdapter, el: Element, debug: DebugPanel): ParseOutcome {
   const reconstructed = adapter.getMessageText(el);
   const inner = (el as HTMLElement).innerText ?? '';
+  const deep = deepCollectText(el);
   const codeCount = el.querySelectorAll(CODE_BLOCK_SELECTOR).length;
+  const hasLocal =
+    looksLikeToolPayload(reconstructed) ||
+    looksLikeToolPayload(inner) ||
+    looksLikeToolPayload(deep);
   debug.log(
-    `scan msg: len=${reconstructed.length} inner=${inner.length} code=${codeCount} hasLOCAL=${looksLikeToolPayload(reconstructed) || looksLikeToolPayload(inner)}`,
+    `scan msg: len=${reconstructed.length} inner=${inner.length} deep=${deep.length} code=${codeCount} hasLOCAL=${hasLocal}`,
   );
 
   const tryText = (label: string, text: string): ParseOutcome => {
@@ -144,20 +158,25 @@ function parseToolRequestFromMessage(adapter: SiteAdapter, el: Element, debug: D
   best = preferOutcome(best, tryText('message innerText', inner));
   if (best.kind === 'request') return best;
 
+  if (deep.length > 0 && deep !== inner) {
+    best = preferOutcome(best, tryText('deep shadow text', deep));
+    if (best.kind === 'request') return best;
+  }
+
   if (inner.length > 0 && inner !== reconstructed) {
     best = preferOutcome(best, tryText('full-message reconstruct', reconstructMarkdownFromDom(el)));
     if (best.kind === 'request') return best;
   }
 
   for (const block of Array.from(el.querySelectorAll(CODE_BLOCK_SELECTOR))) {
-    const text = (block as HTMLElement).innerText || block.textContent || '';
-    if (!looksLikeToolPayload(text)) continue;
+    const text = extractCodeBlockRawText(block);
+    if (!looksLikeToolPayload(text) && !looksLikeJsonToolBlock(text)) continue;
     best = preferOutcome(best, tryText('code block', text));
     if (best.kind === 'request') return best;
   }
 
   if (best.kind === 'none') {
-    debug.log(`parse=none preview="${preview(reconstructed || inner)}"`);
+    debug.log(`parse=none preview="${preview(reconstructed || inner || deep)}"`);
   }
   return best;
 }
@@ -179,6 +198,9 @@ class BridgeContentController {
    * answered in the transcript). Never re-fire these — they are history.
    */
   private historicalToolRequestIds = new Set<string>();
+  /** Ignore duplicate bc/session-started for the same conversation (double claim). */
+  private activeBootstrapConversationId: string | null = null;
+  private bootstrapInProgress = false;
 
   constructor(private readonly adapter: SiteAdapter) {}
 
@@ -275,6 +297,7 @@ class BridgeContentController {
           message.bootstrapMessage,
           message.projectAlias,
           message.chatTitle,
+          message.conversationId,
         );
         return;
       case 'bc/session-resumed':
@@ -285,11 +308,13 @@ class BridgeContentController {
         this.overlay.showPendingToolCall(message.request, message.projectAlias, {
           onRun: () => {
             this.overlay.clear();
+            this.showWorkingOverlay(`Running ${message.request.tool}…`);
             this.debug.log(`user approved ${message.request.tool}`, 'ok');
             send({ type: 'cb/run-approved', requestId: message.request.id });
           },
           onAlwaysAllow: () => {
             this.overlay.clear();
+            this.showWorkingOverlay(`Running ${message.request.tool}…`);
             this.debug.log(`user always-allow ${message.request.tool}`, 'ok');
             send({
               type: 'cb/run-approved',
@@ -299,6 +324,7 @@ class BridgeContentController {
           },
           onDecline: () => {
             this.overlay.clear();
+            this.overlay.clearWorking();
             send({ type: 'cb/run-declined', requestId: message.request.id });
           },
         });
@@ -314,10 +340,15 @@ class BridgeContentController {
         return;
       case 'bc/tool-call-failed':
         this.overlay.clear();
+        this.overlay.clearWorking();
+        // Do not mark as historical on replay — background may retry with a
+        // fresh id. Only ignore if a matching result is already in the chat.
         if (/replay|duplicate/i.test(message.message)) {
-          this.historicalToolRequestIds.add(message.requestId);
+          if (transcriptHasToolResult(document, message.requestId)) {
+            this.historicalToolRequestIds.add(message.requestId);
+          }
           this.debug.log(
-            `companion already handled id=${message.requestId} — not an error`,
+            `companion duplicate/replay for id=${message.requestId} (will retry or ignore if result present)`,
             'warn',
           );
           return;
@@ -327,8 +358,18 @@ class BridgeContentController {
         return;
       case 'bc/session-stopped':
         this.debug.log(`session stopped (${message.reason})`, 'warn');
+        this.awaitingChatLink = false;
+        if (this.chatLinkWaitTimer !== null) {
+          window.clearInterval(this.chatLinkWaitTimer);
+          this.chatLinkWaitTimer = null;
+        }
+        this.stopHeartbeatScans();
+        this.overlay.clearWorking();
+        this.overlay.clear();
         this.overlay.showTransientNotice(
-          `Local Context Bridge session stopped (${message.reason}).`,
+          message.reason === 'user'
+            ? 'Cancelled — Local Context Bridge stopped for this chat.'
+            : `Local Context Bridge session stopped (${message.reason}).`,
         );
         this.watcher?.dispose();
         this.watcher = null;
@@ -349,6 +390,7 @@ class BridgeContentController {
   private async onSessionResumed(projectAlias: string, mode: string): Promise<void> {
     this.debug.log(`session-resumed project=${projectAlias} mode=${mode}`, 'ok');
     this.overlay.hideDetectionPrompt();
+    this.overlay.clearWorking();
     this.overlay.clearSetupProgress();
     this.awaitingChatLink = false;
     if (this.chatLinkWaitTimer !== null) {
@@ -368,8 +410,10 @@ class BridgeContentController {
       const container = this.adapter.getMessageContainer(document) ?? document.body;
       this.attachWatcher(container, 'session-resume-no-composer');
     }
-    // Watch for new assistant turns only; do not heartbeat-rescan the whole history.
+    // Keep scanning — later turns (and Plain Text tool pastes) still need detection.
+    this.startHeartbeatScans();
     this.checkChatId();
+    window.setTimeout(() => this.scanLatestAssistant('after-resume'), 800);
     this.overlay.showTransientNotice(
       `Session resumed (${projectAlias}). Local tools are available for this chat.`,
       'info',
@@ -391,56 +435,152 @@ class BridgeContentController {
     bootstrapMessage: string,
     projectAlias: string,
     chatTitle?: string,
+    conversationId?: string,
   ): Promise<void> {
-    this.debug.log(`session-started project=${projectAlias} bootstrapChars=${bootstrapMessage.length}`);
-    this.historicalToolRequestIds.clear();
-    this.overlay.showSetupProgress('Sending setup message to Copilot…');
-
-    const found = await waitForComposer(this.adapter, document);
-    if (!found) {
-      this.overlay.clearSetupProgress();
-      if (this.adapter.getComposer(document) === null && this.adapter.computeConfidence(document) < 0.25) {
-        this.debug.log('no composer in this frame — ignoring (likely shell frame)', 'warn');
-        return;
-      }
-      this.debug.log('composer not found after wait — showing manual paste', 'error');
-      this.overlay.showBootstrapManual(bootstrapMessage);
+    if (
+      this.bootstrapInProgress ||
+      (conversationId && this.activeBootstrapConversationId === conversationId)
+    ) {
+      this.debug.log(
+        `ignoring duplicate session-started${conversationId ? ` for ${conversationId}` : ''}`,
+        'warn',
+      );
       return;
     }
+    this.bootstrapInProgress = true;
+    if (conversationId) this.activeBootstrapConversationId = conversationId;
 
-    this.debug.log(
-      `composer ok id=${found.composer.id || found.composer.tagName} container=${describeEl(found.container)}`,
-      'ok',
-    );
+    try {
+      this.debug.log(`session-started project=${projectAlias} bootstrapChars=${bootstrapMessage.length}`);
+      this.historicalToolRequestIds.clear();
 
-    this.composer = found.composer;
+      const found = await waitForComposer(this.adapter, document);
+      if (!found) {
+        this.overlay.clearWorking();
+        this.overlay.clearSetupProgress();
+        if (this.adapter.getComposer(document) === null && this.adapter.computeConfidence(document) < 0.25) {
+          this.debug.log('no composer in this frame — ignoring (likely shell frame)', 'warn');
+          return;
+        }
+        this.debug.log('composer not found after wait — showing manual paste', 'error');
+        this.overlay.showBootstrapManual(bootstrapMessage);
+        return;
+      }
+
+      this.debug.log(
+        `composer ok id=${found.composer.id || found.composer.tagName} container=${describeEl(found.container)}`,
+        'ok',
+      );
+
+      this.composer = found.composer;
+      // Keep the WORKING veil off while pasting — Lexical needs real focus/Send.
+      this.overlay.clearWorking();
+      let submitted = await this.pasteAndSend(found.composer, bootstrapMessage, 'bootstrap');
+      if (!submitted) {
+        this.debug.log('bootstrap send failed — retrying once', 'warn');
+        await sleep(400);
+        submitted = await this.pasteAndSend(found.composer, bootstrapMessage, 'bootstrap-retry');
+      }
+      this.debug.log(`bootstrap inserted+submit=${submitted}`, submitted ? 'ok' : 'warn');
+
+      if (chatTitle && this.adapter.setConversationTitle) {
+        window.setTimeout(() => {
+          this.adapter.setConversationTitle?.(document, chatTitle);
+        }, 1200);
+      }
+
+      this.attachWatcher(found.container, 'session-start');
+      this.startHeartbeatScans();
+
+      if (!submitted) {
+        // Leave composer usable so the user (or Retry) can Send.
+        const tryAgain = () => {
+          void (async () => {
+            this.overlay.clear();
+            const composer = this.adapter.getComposer(document) ?? found.composer;
+            const ok = await this.pasteAndSend(composer, bootstrapMessage, 'bootstrap-manual-retry');
+            this.debug.log(`bootstrap manual retry submit=${ok}`, ok ? 'ok' : 'warn');
+            if (ok) {
+              this.showWorkingOverlay('Setup sent — waiting for Copilot to open the chat link…');
+            } else {
+              this.overlay.showBootstrapSendFailed(bootstrapMessage, {
+                onRetry: tryAgain,
+                onCancel: () => this.cancelWorking(),
+              });
+              this.overlay.showTransientNotice(
+                'Still could not click Send — press Send in Copilot yourself.',
+                'error',
+                8000,
+              );
+            }
+          })();
+        };
+        this.overlay.showBootstrapSendFailed(bootstrapMessage, {
+          onRetry: tryAgain,
+          onCancel: () => this.cancelWorking(),
+        });
+        // Still watch for chat link in case the user hits Send themselves.
+        this.beginChatLinkWait();
+        return;
+      }
+
+      this.showWorkingOverlay('Setup sent — waiting for Copilot to open the chat link…');
+      this.beginChatLinkWait();
+    } finally {
+      this.bootstrapInProgress = false;
+    }
+  }
+
+  /**
+   * Paste + Send with the working veil unlocked so Copilot's Lexical editor
+   * can take focus (a full-screen veil was preventing the first Send).
+   */
+  private async pasteAndSend(
+    composer: HTMLElement,
+    text: string,
+    reason: string,
+  ): Promise<boolean> {
+    this.overlay.unlockForComposer();
+    this.overlay.clearWorking();
+    await sleep(60);
+    const active = this.adapter.getComposer(document) ?? composer;
+    active.focus();
+    await sleep(80);
     let submitted = false;
     if (this.adapter.insertAndSubmit) {
-      submitted = await this.adapter.insertAndSubmit(found.composer, bootstrapMessage);
+      submitted = await this.adapter.insertAndSubmit(active, text);
     } else {
-      this.adapter.setComposerText(found.composer, bootstrapMessage);
-      await sleep(80);
-      submitted = this.adapter.submit(document, found.composer);
+      this.adapter.setComposerText(active, text);
+      await sleep(120);
+      submitted = this.adapter.submit(document, active);
     }
-    this.debug.log(`bootstrap inserted+submit=${submitted}`, submitted ? 'ok' : 'warn');
-
-    if (chatTitle && this.adapter.setConversationTitle) {
-      window.setTimeout(() => {
-        this.adapter.setConversationTitle?.(document, chatTitle);
-      }, 1200);
-    }
-
-    this.attachWatcher(found.container, 'session-start');
-    this.startHeartbeatScans();
-
-    // Copilot adds a stable conversationId to the URL after the first turn —
-    // wait for that (no page reload).
-    this.overlay.showSetupProgress(
-      submitted
-        ? 'Setup message sent. Waiting for Copilot to assign a chat link…'
-        : 'Setup message may need a Send click. Waiting for Copilot to assign a chat link…',
+    const leftover = (active.textContent || '').trim().length;
+    this.debug.log(
+      `pasteAndSend(${reason}) submit=${submitted} leftoverChars=${leftover}`,
+      submitted ? 'ok' : 'warn',
     );
-    this.beginChatLinkWait();
+    this.composer = this.adapter.getComposer(document) ?? active;
+    return submitted;
+  }
+
+  /** Full-screen WORKING veil; Cancel stops the session. */
+  private showWorkingOverlay(detail: string): void {
+    this.overlay.showWorking(detail, {
+      onCancel: () => this.cancelWorking(),
+    });
+  }
+
+  private cancelWorking(): void {
+    this.debug.log('user cancelled working overlay', 'warn');
+    this.awaitingChatLink = false;
+    if (this.chatLinkWaitTimer !== null) {
+      window.clearInterval(this.chatLinkWaitTimer);
+      this.chatLinkWaitTimer = null;
+    }
+    this.stopHeartbeatScans();
+    this.overlay.clearWorking();
+    this.overlay.clear();
+    send({ type: 'cb/cancel-working' });
   }
 
   /** Poll until conversationId appears in the URL (SPA updates it eventually). */
@@ -463,13 +603,13 @@ class BridgeContentController {
       }
       // Don't wipe an active tool Run/Insert card.
       if (!this.overlay.isBlocking()) {
-        this.overlay.clearSetupProgress();
+        this.overlay.clearWorking();
         this.overlay.showTransientNotice(
           ok
             ? 'Setup complete — chat link saved. You can resume this session from the Bridge app.'
             : 'Setup message was sent, but the chat link did not appear yet. Keep this tab open — it may still update.',
           ok ? 'info' : 'error',
-          8000,
+          6000,
         );
       }
       this.checkChatId();
@@ -491,8 +631,8 @@ class BridgeContentController {
         return;
       }
       if (this.overlay.isBlocking()) return;
-      if (ticks === 1 || ticks % 4 === 0) {
-        this.overlay.showSetupProgress(
+      if (this.overlay.isWorking() && (ticks === 1 || ticks % 4 === 0)) {
+        this.overlay.updateWorking(
           `Waiting for Copilot chat link… (${Math.round(elapsed / 1000)}s)`,
         );
       }
@@ -506,19 +646,20 @@ class BridgeContentController {
   private startHeartbeatScans(): void {
     if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer);
     let ticks = 0;
+    // Keep scanning for the whole session — later user turns still need tool detection.
     this.heartbeatTimer = window.setInterval(() => {
       ticks += 1;
-      if (ticks > 20) {
-        if (this.heartbeatTimer !== null) {
-          window.clearInterval(this.heartbeatTimer);
-          this.heartbeatTimer = null;
-        }
-        return;
-      }
       if (this.overlay.isBlocking()) return;
-      if (ticks === 1 || ticks % 3 === 0) this.ensureWatcherContainer(`hb:${ticks * 3}s`);
+      if (ticks === 1 || ticks % 4 === 0) this.ensureWatcherContainer(`hb:${ticks * 3}s`);
       this.scanLatestAssistant(`heartbeat:${ticks * 3}s`);
     }, 3000);
+  }
+
+  private stopHeartbeatScans(): void {
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   private startChatIdPolling(): void {
@@ -615,6 +756,7 @@ class BridgeContentController {
       return;
     }
     this.debug.log(`→ tool-request-detected ${outcome.request.tool} id=${outcome.request.id}`, 'ok');
+    this.showWorkingOverlay(`Running ${outcome.request.tool}…`);
     send({ type: 'cb/tool-request-detected', request: outcome.request });
   }
 
@@ -638,36 +780,55 @@ class BridgeContentController {
     this.debug.log(`${reason} scan: container=${describeEl(container)} assistants=${messages.length}`);
     if (messages.length === 0) return;
 
-    // Only the newest assistant turn can request tools. Older LOCAL_TOOL_REQUEST
-    // fences stay in the DOM forever after resume — never walk back into them.
-    const latest = messages[messages.length - 1]!;
-    const latestText = this.adapter.getMessageText(latest) || latest.textContent || '';
-    const latestOutcome = parseToolRequestFromMessage(this.adapter, latest, this.debug);
-    if (latestOutcome.kind === 'request') {
-      this.handleParseOutcome(latestOutcome);
-      return;
-    }
-    if (latestOutcome.kind === 'rejected') {
-      this.handleParseOutcome(latestOutcome);
-    }
-
-    // Code blocks inside the latest message only (not the whole page history).
-    for (const block of Array.from(latest.querySelectorAll(CODE_BLOCK_SELECTOR))) {
-      const text = (block as HTMLElement).innerText || block.textContent || '';
-      if (!looksLikeToolPayload(text)) continue;
-      const outcome = parseLooseToolText(text);
-      if (outcome.kind === 'request') {
-        this.debug.log(`${reason} latest-msg code block → request`, 'ok');
-        this.handleParseOutcome(outcome);
+    // Newest first; walk several recent turns so a tool paste after prose/options
+    // is still found (and Copilot stub nodes like "Copilot said:" don't hide it).
+    const start = Math.max(0, messages.length - 8);
+    for (let i = messages.length - 1; i >= start; i -= 1) {
+      const el = messages[i]!;
+      if (this.tryScanAssistantElement(el, reason, i === messages.length - 1)) {
         return;
       }
     }
+  }
 
-    if (!looksLikeToolPayload(latestText)) {
+  /** @returns true if a tool request was handled (caller should stop walking). */
+  private tryScanAssistantElement(el: Element, reason: string, isLatest: boolean): boolean {
+    const latestText = this.adapter.getMessageText(el) || (el as HTMLElement).textContent || '';
+    const latestOutcome = parseToolRequestFromMessage(this.adapter, el, this.debug);
+    if (latestOutcome.kind === 'request') {
+      this.handleParseOutcome(latestOutcome);
+      return true;
+    }
+    if (latestOutcome.kind === 'rejected' && isLatest) {
+      this.handleParseOutcome(latestOutcome);
+    }
+
+    for (const block of Array.from(el.querySelectorAll(CODE_BLOCK_SELECTOR))) {
+      const text = extractCodeBlockRawText(block);
+      if (!looksLikeToolPayload(text) && !looksLikeJsonToolBlock(text)) continue;
+      const outcome = parseLooseToolText(text);
+      if (outcome.kind === 'request') {
+        this.debug.log(`${reason} code block → request`, 'ok');
+        this.handleParseOutcome(outcome);
+        return true;
+      }
+      // Plain Text JSON without fence language.
+      if (looksLikeJsonToolBlock(text)) {
+        const wrapped = parseLooseToolText('```local-tool-request\n' + stripCopilotCodeGutter(text.trim()) + '\n```');
+        if (wrapped.kind === 'request') {
+          this.debug.log(`${reason} plain JSON code block → request`, 'ok');
+          this.handleParseOutcome(wrapped);
+          return true;
+        }
+      }
+    }
+
+    if (isLatest && !looksLikeToolPayload(latestText) && !looksLikeToolPayload(deepCollectText(el))) {
       this.debug.log(
         `${reason}: latest assistant has no tool request (ok if prose/options)`,
       );
     }
+    return false;
   }
 
   private onFinalAssistantMessage(text: string, el?: Element): void {
@@ -683,14 +844,19 @@ class BridgeContentController {
     const text = formatToolResultFence(result);
     if (requiresConfirmation) {
       this.overlay.showToolResultConfirmation(result, {
-        onInsert: () => this.insertResult(text, autoSubmit, result.requestId),
+        onInsert: () => {
+          this.showWorkingOverlay('Sending tool result to Copilot…');
+          this.insertResult(text, autoSubmit, result.requestId);
+        },
         onDiscard: () => {
           this.overlay.clear();
+          this.overlay.clearWorking();
           send({ type: 'cb/tool-insert-failed', requestId: result.requestId });
         },
       });
       return;
     }
+    this.showWorkingOverlay('Sending tool result to Copilot…');
     this.insertResult(text, autoSubmit, result.requestId);
   }
 
@@ -709,6 +875,7 @@ class BridgeContentController {
     if (!this.composer) {
       this.debug.log('lost composer — cannot insert result', 'error');
       if (requestId) send({ type: 'cb/tool-insert-failed', requestId });
+      this.overlay.clearWorking();
       this.overlay.showTransientNotice(
         'Lost track of the chat composer; could not insert the tool result automatically.',
         'error',
@@ -716,6 +883,7 @@ class BridgeContentController {
       return;
     }
     if (autoSubmit) {
+      this.overlay.unlockForComposer();
       let submitted = false;
       if (this.adapter.insertAndSubmit) {
         submitted = await this.adapter.insertAndSubmit(this.composer, text);
@@ -731,6 +899,7 @@ class BridgeContentController {
         this.historicalToolRequestIds.add(requestId);
       }
       this.overlay.clear();
+      this.overlay.clearWorking();
       this.overlay.showTransientNotice(
         submitted
           ? 'Local tool result sent to Copilot.'
@@ -741,8 +910,10 @@ class BridgeContentController {
       window.setTimeout(() => this.scanLatestAssistant('after-result'), 1500);
       window.setTimeout(() => this.scanLatestAssistant('after-result-2'), 4000);
     } else {
+      this.overlay.unlockForComposer();
       this.adapter.setComposerText(this.composer, text);
       this.debug.log('result inserted (manual send)', 'ok');
+      this.overlay.clearWorking();
       this.overlay.showTransientNotice(
         'Result inserted into the composer — review and send it yourself.',
       );
@@ -761,7 +932,10 @@ function isBackgroundMessage(message: unknown): message is BackgroundToContentMe
 
 /** Request ids already present as LOCAL_TOOL_REQUEST or LOCAL_TOOL_RESULT in the page. */
 function collectHistoricalToolRequestIds(doc: Document): string[] {
-  const text = doc.body?.innerText ?? '';
+  const body = doc.body;
+  const text = body
+    ? `${body.innerText ?? ''}\n${deepCollectText(body)}`
+    : '';
   const ids = new Set<string>();
   for (const m of text.matchAll(/"requestId"\s*:\s*"([^"]{1,128})"/g)) {
     ids.add(m[1]!);
@@ -780,7 +954,10 @@ function collectHistoricalToolRequestIds(doc: Document): string[] {
 }
 
 function transcriptHasToolResult(doc: Document, requestId: string): boolean {
-  const text = doc.body?.innerText ?? '';
+  const body = doc.body;
+  const text = body
+    ? `${body.innerText ?? ''}\n${deepCollectText(body)}`
+    : '';
   if (!text.includes('LOCAL_TOOL_RESULT')) return false;
   return (
     text.includes(`"requestId": "${requestId}"`) ||

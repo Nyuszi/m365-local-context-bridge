@@ -48,8 +48,12 @@ const pendingCalls = new Map<
   string,
   { request: LocalToolRequest; tabId: number; fingerprint: string }
 >();
+/** Request ids currently executing — blocks double-fire while pendingCalls was cleared. */
+const inFlightCalls = new Set<string>();
 /** requestId → fingerprint for results already sent to the tab (insert may still fail). */
 const deliveredFingerprints = new Map<string, string>();
+/** Prevents two parallel desktop-START consumers from both pasting bootstrap. */
+let pendingStartClaim: Promise<boolean> | null = null;
 const detectedTabs = new Map<
   number,
   { adapterId: string; confidence: number; url: string; frameId: number; hasComposer: boolean }
@@ -340,6 +344,7 @@ async function startSessionForTab(
   await persistSession();
   seenRequests.clear();
   pendingCalls.clear();
+  inFlightCalls.clear();
   await clearTabDismissal(tabId);
 
   try {
@@ -741,36 +746,43 @@ async function ensureReadyAndStartSession(
 }
 
 async function maybeConsumePendingStart(tabId: number): Promise<boolean> {
-  try {
-    const companion = await getCompanionClient();
-    await companion.health();
-    // Peek first — only consume after the session actually starts, so a failed
-    // attempt does not drop the desktop START request.
-    const peek = await companion.peekPendingStart();
-    if (!peek.pending) return false;
+  // Serialize claims — content-ready + adapter-detected both fire on load.
+  if (pendingStartClaim) return pendingStartClaim;
+  pendingStartClaim = (async () => {
+    try {
+      const companion = await getCompanionClient();
+      await companion.health();
+      // Peek first — only consume after the session actually starts, so a failed
+      // attempt does not drop the desktop START request.
+      const peek = await companion.peekPendingStart();
+      if (!peek.pending) return false;
 
-    const mode =
-      peek.mode === 'manual' || peek.mode === 'assisted' || peek.mode === 'automatic'
-        ? peek.mode
-        : undefined;
-    const initialTask =
-      peek.initialTask?.trim() || (peek.explore === false ? undefined : DEFAULT_EXPLORE_TASK);
+      const mode =
+        peek.mode === 'manual' || peek.mode === 'assisted' || peek.mode === 'automatic'
+          ? peek.mode
+          : undefined;
+      const initialTask =
+        peek.initialTask?.trim() || (peek.explore === false ? undefined : DEFAULT_EXPLORE_TASK);
 
-    await updateSettings({ copilotEnabled: true, suggestOnCopilotOpen: true });
-    await ensureReadyAndStartSession(tabId, {
-      projectAlias: peek.rootAlias,
-      mode,
-      initialTask,
-      chatId: peek.sessionId,
-      title: peek.title,
-    });
-    await companion.consumePendingStart().catch(() => undefined);
-    await closeSetupTabs();
-    return true;
-  } catch (err) {
-    console.error('[local-context-bridge] pending start failed', err);
-    return false;
-  }
+      await updateSettings({ copilotEnabled: true, suggestOnCopilotOpen: true });
+      await ensureReadyAndStartSession(tabId, {
+        projectAlias: peek.rootAlias,
+        mode,
+        initialTask,
+        chatId: peek.sessionId,
+        title: peek.title,
+      });
+      await companion.consumePendingStart().catch(() => undefined);
+      await closeSetupTabs();
+      return true;
+    } catch (err) {
+      console.error('[local-context-bridge] pending start failed', err);
+      return false;
+    } finally {
+      pendingStartClaim = null;
+    }
+  })();
+  return pendingStartClaim;
 }
 
 /** Claim a desktop START even if Copilot was already open (no navigation). */
@@ -914,17 +926,21 @@ async function maybeShowDetectionPrompt(
 async function executePendingCall(requestId: string): Promise<void> {
   const pending = pendingCalls.get(requestId);
   if (!pending) return;
+  if (inFlightCalls.has(requestId)) return;
   pendingCalls.delete(requestId);
+  inFlightCalls.add(requestId);
 
   const state = sessionManager.getState();
   if (state.status !== 'active' || state.tabId !== pending.tabId) {
     seenRequests.forget(pending.fingerprint);
+    inFlightCalls.delete(requestId);
     return;
   }
 
   const decision = sessionManager.canRecordCall(SESSION_LIMITS);
   if (!decision.allowed) {
     seenRequests.forget(pending.fingerprint);
+    inFlightCalls.delete(requestId);
     await stopSessionInternal(
       decision.reason === 'max-iterations' ? 'max-iterations' : 'session-expired',
     );
@@ -934,6 +950,7 @@ async function executePendingCall(requestId: string): Promise<void> {
   const pairing = await getPairing();
   if (!pairing) {
     seenRequests.forget(pending.fingerprint);
+    inFlightCalls.delete(requestId);
     await safeSendToTab(pending.tabId, {
       type: 'bc/tool-call-failed',
       requestId,
@@ -944,7 +961,35 @@ async function executePendingCall(requestId: string): Promise<void> {
 
   try {
     const companion = await getCompanionClient();
-    const result = await companion.executeTool(pairing.token, pending.request);
+    let result = await companion.executeTool(pairing.token, pending.request).catch(async (err) => {
+      // Copilot often reuses short ids like "dir-summary-001". Companion rejects
+      // those within the replay TTL — retry once with a fresh id, but keep the
+      // original requestId on the result so the chat protocol still matches.
+      const replay =
+        err instanceof BridgeApiError &&
+        (err.status === 409 ||
+          /replay|duplicate/i.test(err.message) ||
+          /replay|duplicate/i.test(err.code));
+      if (!replay) throw err;
+
+      const retryId = crypto.randomUUID();
+      await safeSendToTab(pending.tabId, {
+        type: 'bc/debug',
+        level: 'warn',
+        message: `duplicate id=${pending.request.id} — retrying as ${retryId}`,
+      });
+      const retried = await companion.executeTool(pairing.token, {
+        ...pending.request,
+        id: retryId,
+      });
+      return { ...retried, requestId: pending.request.id };
+    });
+
+    // Always echo Copilot's original id in the result fence.
+    if (result.requestId !== pending.request.id) {
+      result = { ...result, requestId: pending.request.id };
+    }
+
     sessionManager.recordCall();
     await persistSession();
 
@@ -967,24 +1012,10 @@ async function executePendingCall(requestId: string): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof BridgeApiError ? err.message : 'Tool execution failed.';
-    const replay =
-      err instanceof BridgeApiError &&
-      (err.status === 409 ||
-        /replay|duplicate/i.test(err.message) ||
-        /replay|duplicate/i.test(err.code));
-    if (replay) {
-      // Companion already ran this request id — stop retrying; not a user-facing failure.
-      seenRequests.remember(pending.fingerprint);
-      deliveredFingerprints.set(pending.request.id, pending.fingerprint);
-      await safeSendToTab(pending.tabId, {
-        type: 'bc/tool-call-failed',
-        requestId,
-        message: 'Replay or duplicate detected.',
-      });
-      return;
-    }
     seenRequests.forget(pending.fingerprint);
     await safeSendToTab(pending.tabId, { type: 'bc/tool-call-failed', requestId, message });
+  } finally {
+    inFlightCalls.delete(requestId);
   }
 }
 
@@ -1000,7 +1031,11 @@ async function onToolRequestDetected(tabId: number, request: LocalToolRequest): 
   }
 
   const fingerprint = await fingerprintRequest(request);
-  if (seenRequests.has(fingerprint) || pendingCalls.has(request.id)) {
+  if (
+    seenRequests.has(fingerprint) ||
+    pendingCalls.has(request.id) ||
+    inFlightCalls.has(request.id)
+  ) {
     await safeSendToTab(tabId, {
       type: 'bc/debug',
       level: 'warn',
@@ -1109,6 +1144,9 @@ async function handleContentMessage(
       }
       return;
     }
+    case 'cb/cancel-working':
+      await stopSessionInternal('user');
+      return;
     case 'cb/set-developer-logs': {
       await updateSettings({ showDeveloperLogs: message.enabled });
       broadcast({ type: 'broadcast/state-changed' });

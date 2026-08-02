@@ -89,11 +89,35 @@ describe('reconstructMarkdownFromDom', () => {
     }
   });
 
-  it('strips Copilot gutter line numbers so JSON can parse', () => {
-    const guttered = `Kotlin\n1\n{\n2\n  "protocolVersion": "1.0",\n3\n  "type": "LOCAL_TOOL_REQUEST",\n4\n  "id": "x",\n5\n  "tool": "find_files",\n6\n  "arguments": { "pattern": "*.ts" }\n7\n}`;
-    const cleaned = stripCopilotCodeGutter(guttered);
-    expect(cleaned).not.toMatch(/^\d+$/m);
-    const parsed = parseAssistantMessage(cleaned);
+  it('recovers LOCAL_TOOL_REQUEST from an open shadow root inside scriptor', () => {
+    const payload = `{
+  "protocolVersion": "1.0",
+  "type": "LOCAL_TOOL_REQUEST",
+  "id": "shadow-find-001",
+  "tool": "find_files",
+  "arguments": { "pattern": "*.ts" }
+}`;
+    document.body.innerHTML = `
+      <div class="fai-CopilotMessage">
+        <div class="scriptor-component-code-block">
+          <div id="language-badge">Plain Text</div>
+          <div class="hint">local-tool-request isn't fully supported. Syntax highlighting is based on Plain Text.</div>
+        </div>
+      </div>
+    `;
+    const block = document.querySelector('.scriptor-component-code-block') as HTMLElement;
+    const shadow = block.attachShadow({ mode: 'open' });
+    const pre = document.createElement('pre');
+    pre.textContent = payload;
+    shadow.appendChild(pre);
+
+    const text = reconstructMarkdownFromDom(document.querySelector('.fai-CopilotMessage')!);
+    expect(text).toContain('LOCAL_TOOL_REQUEST');
+    const parsed = parseAssistantMessage(text);
     expect(parsed.kind).toBe('request');
+    if (parsed.kind === 'request') {
+      expect(parsed.request.id).toBe('shadow-find-001');
+      expect(parsed.request.tool).toBe('find_files');
+    }
   });
 });

@@ -38,7 +38,8 @@ export type ContentToBackgroundMessage =
       title?: string;
     }
   | { type: 'cb/check-pending-start' }
-  | { type: 'cb/tool-insert-failed'; requestId: string };
+  | { type: 'cb/tool-insert-failed'; requestId: string }
+  | { type: 'cb/cancel-working' };
 
 export function isContentToBackgroundMessage(
   message: unknown,
