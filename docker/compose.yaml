@@ -1,0 +1,45 @@
+# Local Context Bridge — Docker Desktop sidecar
+# Prefer: docker compose --profile bridge up
+# Publish ONLY loopback. Never privileged, host network, or the Docker control socket.
+
+name: local-context-bridge
+
+services:
+  bridge:
+    profiles: ["bridge"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: local-context-bridge:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:32178:32178"
+    environment:
+      LOCAL_CONTEXT_BRIDGE_DOCKER: "1"
+      LOCAL_CONTEXT_BRIDGE_DATA: /data
+      # Absolute host path must be provided via .env (PROJECT_HOST_PATH)
+      BRIDGE_PRIMARY_ALIAS: ${BRIDGE_PRIMARY_ALIAS:-project}
+      BRIDGE_PRIMARY_MOUNT: /workspace/primary
+    volumes:
+      - bridge-data:/data:rw
+      - type: bind
+        source: ${PROJECT_HOST_PATH:?Set PROJECT_HOST_PATH to an absolute project directory}
+        target: /workspace/primary
+        read_only: true
+    tmpfs:
+      - /tmp/bridge:size=64m,mode=1777,noexec,nosuid,nodev
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:32178/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  bridge-data:

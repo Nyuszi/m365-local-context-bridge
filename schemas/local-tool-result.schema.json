@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-context-bridge/schemas/local-tool-result.schema.json",
+  "title": "LocalToolResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "type",
+    "requestId",
+    "success",
+    "tool",
+    "durationMs",
+    "truncated",
+    "data",
+    "warnings"
+  ],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "type": { "const": "LOCAL_TOOL_RESULT" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "success": { "type": "boolean" },
+    "tool": { "type": "string" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" },
+    "data": { "type": ["object", "null"] },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "correlationId": { "type": "string" }
+      }
+    }
+  }
+}

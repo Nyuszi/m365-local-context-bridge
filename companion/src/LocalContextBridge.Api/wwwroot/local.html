@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Local Context Bridge — Companion</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115;
+    --panel: #161a21;
+    --panel-border: #262c36;
+    --text: #e6e9ef;
+    --muted: #9aa4b2;
+    --accent: #4f8cff;
+    --ok: #3ecf8e;
+    --warn: #f5a623;
+    --danger: #ef5350;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 28px 80px;
+    display: grid;
+    gap: 20px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card h2 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .kv { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 6px 16px; font-size: 14px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; word-break: break-all; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); }
+  .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .badge.danger { background: rgba(239,83,80,.15); color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--panel-border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  input, select, button {
+    font: inherit;
+    background: #0d0f14;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 7px 10px;
+  }
+  input { min-width: 180px; flex: 1; }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06101f;
+    font-weight: 600;
+  }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--panel-border); }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #200; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  .warnings-list { margin: 0; padding-left: 18px; }
+  .warnings-list li { color: var(--warn); margin-bottom: 4px; }
+  pre {
+    background: #0d0f14;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    max-width: 360px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Local Context Bridge</h1>
+    <div class="sub">Companion management — read-only, loopback-only</div>
+  </div>
+  <div class="row" id="health-badge">
+    <span class="badge warn">checking…</span>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="overview-card">
+    <h2>Companion status</h2>
+    <dl class="kv" id="overview-kv"></dl>
+    <ul class="warnings-list" id="overview-warnings"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Approved roots</h2>
+    <div class="row" style="margin-bottom: 12px;">
+      <input id="root-path" placeholder="/absolute/path/to/project" />
+      <input id="root-alias" placeholder="alias (e.g. billing-service)" style="min-width: 160px; flex: 0.6;" />
+      <select id="root-policy">
+        <option value="AskPerSession" selected>Ask per session</option>
+        <option value="AskEveryOperation">Ask every operation</option>
+        <option value="Automatic">Automatic</option>
+        <option value="Denied">Denied</option>
+      </select>
+      <button id="add-root-btn">Add root</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Alias</th><th>Path</th><th>Primary</th><th>Policy</th><th>Persistence</th><th></th></tr>
+      </thead>
+      <tbody id="roots-body"></tbody>
+    </table>
+    <div class="empty" id="roots-empty" style="display:none;">No approved roots yet. Add one above, or start the launcher with <code>--project</code>.</div>
+  </section>
+
+  <section class="card">
+    <h2>Pairing approvals</h2>
+    <table>
+      <thead><tr><th>Code</th><th>Installation</th><th>Origin</th><th>Expires</th><th></th></tr></thead>
+      <tbody id="pending-body"></tbody>
+    </table>
+    <div class="empty" id="pending-empty" style="display:none;">No pending pairing requests.</div>
+  </section>
+
+  <section class="card">
+    <h2>Paired clients</h2>
+    <table>
+      <thead><tr><th>Client</th><th>Origin</th><th>Paired at</th><th></th></tr></thead>
+      <tbody id="clients-body"></tbody>
+    </table>
+    <div class="empty" id="clients-empty" style="display:none;">No paired extensions.</div>
+    <div class="row" style="margin-top: 12px;">
+      <button class="danger" id="revoke-all-btn">Revoke all tokens (emergency stop)</button>
+    </div>
+    <p class="muted">Tokens are never displayed here or anywhere else after initial redemption.</p>
+  </section>
+
+  <section class="card">
+    <h2>Exclusions &amp; hard-denies</h2>
+    <div class="kv">
+      <dt>Excluded directories</dt><dd id="excluded-dirs"></dd>
+      <dt>Hard-denied file patterns</dt><dd id="denied-patterns"></dd>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Test a read-only tool</h2>
+    <div class="row">
+      <button id="test-tool-btn">Run <code>project_info</code> against the primary root</button>
+    </div>
+    <pre id="test-tool-output" style="display:none;"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Audit activity</h2>
+    <div class="row" style="margin-bottom: 10px;">
+      <button class="secondary" id="refresh-audit-btn">Refresh</button>
+      <button class="secondary" id="clear-audit-btn">Clear logs</button>
+    </div>
+    <table>
+      <thead><tr><th>Time</th><th>Category</th><th>Tool</th><th>Root</th><th>Message</th><th>Result</th></tr></thead>
+      <tbody id="audit-body"></tbody>
+    </table>
+    <div class="empty" id="audit-empty" style="display:none;">No activity recorded yet.</div>
+  </section>
+
+  <section class="card">
+    <h2>Corporate policy notice</h2>
+    <p class="muted">
+      This tool does not bypass administrator controls, DLP, or enterprise browser policy.
+      Deploy via approved channels when required by your organization. All tools are read-only;
+      version 1 has no shell, write, git, build, or network-tool capability.
+    </p>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const api = (path, options) => fetch('/api/v1/local' + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options))
+  .then(async (r) => {
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((body.error && body.error.message) || ('HTTP ' + r.status));
+    return body;
+  });
+
+function toast(message) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.style.display = 'block';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function loadHealth() {
+  try {
+    const health = await fetch('/health').then((r) => r.json());
+    document.getElementById('health-badge').innerHTML =
+      `<span class="badge ok">healthy · v${esc(health.version)}</span>`;
+  } catch {
+    document.getElementById('health-badge').innerHTML = '<span class="badge danger">offline</span>';
+  }
+}
+
+async function loadOverview() {
+  const o = await api('/overview');
+  const kv = document.getElementById('overview-kv');
+  kv.innerHTML = [
+    ['Version', o.version],
+    ['Protocol', o.protocolVersion],
+    ['Primary project', o.primaryAlias || '(none)'],
+    ['Mode', o.dockerMode ? 'Docker sidecar' : 'Native'],
+    ['Listening on', `${o.listenHost}:${o.port}`],
+    ['Data directory', o.dataDirectory],
+    ['Paired clients', o.pairedClientCount],
+  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+
+  const warnings = document.getElementById('overview-warnings');
+  warnings.innerHTML = (o.warnings || []).map((w) => `<li>${esc(w)}</li>`).join('');
+}
+
+async function loadRoots() {
+  const { roots } = await api('/roots');
+  const body = document.getElementById('roots-body');
+  document.getElementById('roots-empty').style.display = roots.length ? 'none' : 'block';
+  body.innerHTML = roots.map((r) => `
+    <tr>
+      <td>${esc(r.alias)}</td>
+      <td class="muted">${esc(r.absolutePath)}</td>
+      <td>${r.isPrimary ? '<span class="badge ok">primary</span>' : `<button class="secondary" data-primary="${esc(r.alias)}">Make primary</button>`}</td>
+      <td>
+        <select data-policy="${esc(r.alias)}">
+          ${['Automatic', 'AskPerSession', 'AskEveryOperation', 'Denied'].map((p) => `<option value="${p}" ${p === r.accessPolicy ? 'selected' : ''}>${p}</option>`).join('')}
+        </select>
+      </td>
+      <td>${esc(r.persistence)}</td>
+      <td><button class="danger" data-remove="${esc(r.alias)}">Remove</button></td>
+    </tr>`).join('');
+
+  body.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api(`/roots/${encodeURIComponent(btn.dataset.remove)}`, { method: 'DELETE' });
+    toast('Root removed.');
+    refreshAll();
+  }));
+  body.querySelectorAll('[data-primary]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api(`/roots/${encodeURIComponent(btn.dataset.primary)}/primary`, { method: 'PUT' });
+    toast('Primary root updated.');
+    refreshAll();
+  }));
+  body.querySelectorAll('[data-policy]').forEach((sel) => sel.addEventListener('change', async () => {
+    await api(`/roots/${encodeURIComponent(sel.dataset.policy)}/policy`, { method: 'PUT', body: JSON.stringify({ policy: sel.value }) });
+    toast('Access policy updated.');
+  }));
+}
+
+async function loadPending() {
+  const { pending } = await api('/pairing/pending');
+  const body = document.getElementById('pending-body');
+  document.getElementById('pending-empty').style.display = pending.length ? 'none' : 'block';
+  body.innerHTML = pending.map((p) => `
+    <tr>
+      <td><strong>${esc(p.code)}</strong></td>
+      <td class="muted">${esc(p.installationId)}</td>
+      <td class="muted">${esc(p.extensionOrigin)}</td>
+      <td class="muted">${new Date(p.expiresAt).toLocaleTimeString()}</td>
+      <td class="row">
+        ${p.approved ? '<span class="badge ok">approved — awaiting redeem</span>' : `
+          <button data-approve="${esc(p.pairingId)}">Approve</button>
+          <button class="secondary" data-deny="${esc(p.pairingId)}">Deny</button>`}
+      </td>
+    </tr>`).join('');
+
+  body.querySelectorAll('[data-approve]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api(`/pairing/${encodeURIComponent(btn.dataset.approve)}/approve`, { method: 'POST' });
+    toast('Pairing approved.');
+    refreshAll();
+  }));
+  body.querySelectorAll('[data-deny]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api(`/pairing/${encodeURIComponent(btn.dataset.deny)}/deny`, { method: 'POST' });
+    toast('Pairing denied.');
+    refreshAll();
+  }));
+}
+
+async function loadClients() {
+  const { clients } = await api('/pairing/clients');
+  const body = document.getElementById('clients-body');
+  document.getElementById('clients-empty').style.display = clients.length ? 'none' : 'block';
+  body.innerHTML = clients.map((c) => `
+    <tr>
+      <td class="muted">${esc(c.clientId)}…</td>
+      <td class="muted">${esc(c.extensionOrigin)}</td>
+      <td class="muted">${new Date(c.pairedAt).toLocaleString()}</td>
+      <td><button class="danger" data-revoke="${esc(c.clientId)}">Revoke</button></td>
+    </tr>`).join('');
+
+  body.querySelectorAll('[data-revoke]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api(`/pairing/clients/${encodeURIComponent(btn.dataset.revoke)}/revoke`, { method: 'POST' });
+    toast('Client revoked.');
+    refreshAll();
+  }));
+}
+
+async function loadExclusions() {
+  const x = await api('/exclusions');
+  document.getElementById('excluded-dirs').textContent = (x.excludedDirectories || []).join(', ');
+  document.getElementById('denied-patterns').textContent = (x.hardDenyPatterns || []).join(', ');
+}
+
+async function loadAudit() {
+  const { entries } = await api('/audit?count=100');
+  const body = document.getElementById('audit-body');
+  document.getElementById('audit-empty').style.display = entries.length ? 'none' : 'block';
+  body.innerHTML = entries.map((e) => `
+    <tr>
+      <td class="muted">${new Date(e.timestamp).toLocaleTimeString()}</td>
+      <td>${esc(e.category)}</td>
+      <td class="muted">${esc(e.tool || '')}</td>
+      <td class="muted">${esc(e.rootAlias || '')}</td>
+      <td>${esc(e.message)}</td>
+      <td>${e.success ? '<span class="badge ok">ok</span>' : '<span class="badge danger">failed</span>'}</td>
+    </tr>`).join('');
+}
+
+async function refreshAll() {
+  await Promise.all([loadHealth(), loadOverview(), loadRoots(), loadPending(), loadClients(), loadExclusions(), loadAudit()]);
+}
+
+document.getElementById('add-root-btn').addEventListener('click', async () => {
+  const path = document.getElementById('root-path').value.trim();
+  const alias = document.getElementById('root-alias').value.trim();
+  const policy = document.getElementById('root-policy').value;
+  if (!path || !alias) { toast('Path and alias are required.'); return; }
+  try {
+    await api('/register-root', { method: 'POST', body: JSON.stringify({ path, alias, policy }) });
+    document.getElementById('root-path').value = '';
+    document.getElementById('root-alias').value = '';
+    toast('Root added.');
+    refreshAll();
+  } catch (e) { toast('Failed to add root: ' + e.message); }
+});
+
+document.getElementById('revoke-all-btn').addEventListener('click', async () => {
+  if (!confirm('Revoke ALL paired extension tokens? This immediately ends every active session.')) return;
+  await api('/pairing/revoke-all', { method: 'POST' });
+  toast('All tokens revoked.');
+  refreshAll();
+});
+
+document.getElementById('refresh-audit-btn').addEventListener('click', loadAudit);
+document.getElementById('clear-audit-btn').addEventListener('click', async () => {
+  await api('/audit/clear', { method: 'POST' });
+  toast('Audit log cleared.');
+  loadAudit();
+});
+
+document.getElementById('test-tool-btn').addEventListener('click', async () => {
+  const out = document.getElementById('test-tool-output');
+  out.style.display = 'block';
+  out.textContent = 'Running…';
+  try {
+    const result = await api('/test-tool', { method: 'POST' });
+    out.textContent = JSON.stringify(result, null, 2);
+  } catch (e) {
+    out.textContent = 'Failed: ' + e.message;
+  }
+});
+
+refreshAll();
+setInterval(refreshAll, 8000);
+</script>
+</body>
+</html>

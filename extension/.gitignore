@@ -1,0 +1,7 @@
+node_modules/
+dist-zip/
+coverage/
+*.log
+.DS_Store
+
+# dist/ is committed so Load unpacked works after clone

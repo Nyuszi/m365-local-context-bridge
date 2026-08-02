@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-context-bridge/schemas/local-tool-request.schema.json",
+  "title": "LocalToolRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "type", "id", "tool", "arguments"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "type": { "const": "LOCAL_TOOL_REQUEST" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "tool": {
+      "type": "string",
+      "enum": [
+        "project_info",
+        "list_files",
+        "find_files",
+        "directory_summary",
+        "search_text",
+        "read_file"
+      ]
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

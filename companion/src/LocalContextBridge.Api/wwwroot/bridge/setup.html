@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Local Context Bridge — Setup</title>
+  <link rel="stylesheet" href="/bridge/styles.css"/>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <h1>Local Context Bridge</h1>
+      <p class="muted">First-run setup</p>
+    </div>
+    <div class="theme-switch" title="Theme">
+      <button type="button" data-theme-set="system">Auto</button>
+      <button type="button" data-theme-set="light">Light</button>
+      <button type="button" data-theme-set="dark">Dark</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p class="status" id="healthStatus">Checking companion…</p>
+    <div class="row">
+      <a class="btn secondary" href="/app">Open status app</a>
+      <a class="btn link" href="/local">Advanced</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Chrome</h2>
+    <p class="status" id="chromeStatus">Checking…</p>
+    <div class="row">
+      <button class="primary" id="getChrome" type="button">Get Google Chrome</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Extension</h2>
+    <p class="status" id="extStatus">Checking…</p>
+    <div class="guide" id="extGuide">
+      <strong>Setup guide</strong>
+      <ol>
+        <li>Click <strong>Add extension</strong> (opens Chrome Extensions + Finder).</li>
+        <li>If a blocked/disabled “Local Context Bridge” is listed, remove it.</li>
+        <li>Turn on <strong>Developer mode</strong> (top right).</li>
+        <li>Click <strong>Load unpacked</strong> and choose the folder highlighted in Finder.</li>
+        <li>Come back here and click <strong>Refresh status</strong>.</li>
+      </ol>
+      <p class="note">Chrome blocks silent installs. Load unpacked is the supported path. Expected id: <code id="extId">…</code></p>
+      <p class="note">Already loaded? Open the extension popup once (or any Copilot tab), then click <strong>Refresh status</strong> — the extension heartbeats this companion.</p>
+    </div>
+    <div class="row">
+      <button class="primary" id="addExtension" type="button">Add extension</button>
+      <button class="secondary" id="refreshExt" type="button">Refresh status</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Project folder</h2>
+    <p class="status" id="folderStatus">No folder approved yet.</p>
+    <label class="field" for="alias">Alias</label>
+    <input id="alias" type="text" placeholder="project"/>
+    <div class="row">
+      <button class="primary" id="pickFolder" type="button">Choose folder…</button>
+      <button class="secondary" id="enableHome" type="button">Enable home access</button>
+    </div>
+    <p class="note">Alias defaults to the folder name when you pick a project.</p>
+  </div>
+
+  <div class="card">
+    <h2>Default mode</h2>
+    <div class="modes">
+      <label>
+        <input type="radio" name="mode" value="manual"/>
+        <span class="mode-copy"><strong>Manual</strong> — confirm every tool and insert</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="assisted" checked/>
+        <span class="mode-copy"><strong>Assisted</strong> — confirm tools; auto-insert (default)</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="automatic"/>
+        <span class="mode-copy"><strong>Automatic</strong> — hands-off</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Session</h2>
+    <p class="status" id="sessionStatus"></p>
+    <div class="row">
+      <button class="primary" id="startInCopilot" type="button">Start in Copilot</button>
+    </div>
+    <p class="note">Opens Copilot, starts the session, pastes + sends the setup message, then closes this setup tab.</p>
+  </div>
+</main>
+<script src="/bridge/common.js"></script>
+<script>
+const { fetchJson, aliasFromPath, wireThemeSwitch } = BridgeUI;
+wireThemeSwitch();
+
+function selectedMode() {
+  const el = document.querySelector('input[name=mode]:checked');
+  return el ? el.value : 'assisted';
+}
+
+async function saveMode() {
+  await fetchJson('/api/v1/local/preferences', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ defaultMode: selectedMode() }),
+  });
+}
+document.querySelectorAll('input[name=mode]').forEach((r) =>
+  r.addEventListener('change', () => saveMode()),
+);
+
+document.getElementById('getChrome').onclick = () =>
+  window.open('https://www.google.com/chrome/', '_blank');
+
+async function refreshExtStatus() {
+  const status = document.getElementById('extStatus');
+  const btn = document.getElementById('addExtension');
+  const guide = document.getElementById('extGuide');
+  try {
+    const j = await fetchJson('/api/v1/local/extension-status');
+    document.getElementById('extId').textContent = j.extensionId || '';
+    if (j.installed) {
+      status.textContent = j.fromHeartbeat
+        ? 'Extension connected (heartbeat).'
+        : 'Extension is installed in Chrome.';
+      status.className = 'status ok';
+      btn.disabled = true;
+      guide.style.display = 'none';
+    } else {
+      status.textContent = 'Extension not detected — follow the setup guide below.';
+      status.className = 'status warn';
+      btn.disabled = false;
+      guide.style.display = '';
+    }
+  } catch {
+    status.textContent = 'Could not check extension status.';
+    status.className = 'status err';
+  }
+}
+
+document.getElementById('refreshExt').onclick = () => refreshExtStatus();
+document.getElementById('addExtension').onclick = async () => {
+  const status = document.getElementById('extStatus');
+  const btn = document.getElementById('addExtension');
+  btn.disabled = true;
+  status.textContent = 'Opening Chrome Extensions + Finder…';
+  status.className = 'status';
+  try {
+    const j = await fetchJson('/api/v1/local/install-extension', { method: 'POST' });
+    if (j.installed || j.alreadyPresent) {
+      status.textContent = j.message || 'Installed.';
+      status.className = 'status ok';
+      document.getElementById('extGuide').style.display = 'none';
+    } else {
+      status.textContent =
+        'Load unpacked in Chrome (folder highlighted in Finder), then Refresh status.';
+      status.className = 'status warn';
+      btn.disabled = false;
+      document.getElementById('extGuide').style.display = '';
+    }
+  } catch (e) {
+    status.textContent = e.message || 'Install help failed.';
+    status.className = 'status err';
+    btn.disabled = false;
+  }
+};
+
+document.getElementById('pickFolder').onclick = async () => {
+  const status = document.getElementById('folderStatus');
+  status.textContent = 'Opening folder picker…';
+  try {
+    const j = await fetchJson('/api/v1/local/pick-folder', { method: 'POST' });
+    const path = j.path;
+    const alias = aliasFromPath(path);
+    document.getElementById('alias').value = alias;
+    await fetchJson('/api/v1/local/register-root', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, alias, primary: true }),
+    });
+    status.textContent = `${alias} — ${path}`;
+    status.className = 'status ok';
+  } catch (e) {
+    status.textContent = e.message || 'Cancelled';
+    status.className = 'status err';
+  }
+};
+
+document.getElementById('enableHome').onclick = async () => {
+  if (!confirm('Allow read-only tools across your entire home folder?')) return;
+  const status = document.getElementById('folderStatus');
+  try {
+    const state = await fetchJson('/api/v1/local/setup-state');
+    await fetchJson('/api/v1/local/register-root', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.homePath, alias: 'home', primary: false }),
+    });
+    status.textContent = 'Home access enabled';
+    status.className = 'status ok';
+  } catch (e) {
+    status.textContent = e.message || 'Failed';
+    status.className = 'status err';
+  }
+};
+
+document.getElementById('startInCopilot').onclick = async () => {
+  const status = document.getElementById('sessionStatus');
+  const btn = document.getElementById('startInCopilot');
+  btn.disabled = true;
+  status.textContent = 'Starting…';
+  status.className = 'status';
+  await saveMode();
+  const alias = document.getElementById('alias').value.trim() || undefined;
+  try {
+    await fetchJson('/api/v1/local/start-in-copilot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: selectedMode(), rootAlias: alias, explore: true }),
+    });
+    status.textContent = 'Copilot opening — this setup tab will close.';
+    status.className = 'status ok';
+    setTimeout(() => {
+      window.close();
+      // If the browser blocks window.close, navigate to status app.
+      location.href = '/app';
+    }, 600);
+  } catch (e) {
+    status.textContent = e.message || 'Could not start';
+    status.className = 'status err';
+    btn.disabled = false;
+  }
+};
+
+(async function init() {
+  try {
+    await fetch('/health');
+    document.getElementById('healthStatus').textContent = 'Companion online';
+    document.getElementById('healthStatus').className = 'status ok';
+    document.getElementById('chromeStatus').textContent =
+      'Use Google Chrome for Copilot + the extension.';
+    document.getElementById('chromeStatus').className = 'status ok';
+  } catch {
+    document.getElementById('healthStatus').textContent = 'Companion offline';
+    document.getElementById('healthStatus').className = 'status err';
+  }
+  try {
+    const state = await fetchJson('/api/v1/local/setup-state');
+    document.getElementById('extId').textContent = state.extensionId || '';
+    if (state.primaryPath) {
+      document.getElementById('folderStatus').textContent =
+        `${state.primaryAlias} — ${state.primaryPath}`;
+      document.getElementById('folderStatus').className = 'status ok';
+      document.getElementById('alias').value = state.primaryAlias || '';
+    }
+    if (state.defaultMode) {
+      const radio = document.querySelector(`input[name=mode][value="${state.defaultMode}"]`);
+      if (radio) radio.checked = true;
+    }
+  } catch { /* ignore */ }
+  refreshExtStatus();
+})();
+</script>
+</body>
+</html>

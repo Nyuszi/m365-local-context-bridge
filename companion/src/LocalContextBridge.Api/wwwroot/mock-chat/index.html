@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mock Chat — Local Context Bridge</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2332;
+    --panel-2: #202b3d;
+    --border: #2a3548;
+    --text: #e7ecf3;
+    --muted: #9aa7b8;
+    --accent: #3d9cf0;
+    --accent-strong: #154ab8;
+    --user-bubble: #154ab8;
+    --assistant-bubble: #1f2937;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(1200px 600px at 10% -10%, #1c2a40, var(--bg));
+    color: var(--text);
+  }
+  #app {
+    max-width: 760px;
+    margin: 0 auto;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+  }
+  header .sub {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  #conversation-id {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  #conversation-id code {
+    background: var(--panel-2);
+    padding: 2px 6px;
+    border-radius: 6px;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button {
+    font: inherit;
+    border: 0;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  button.primary {
+    background: var(--accent-strong);
+    color: #fff;
+  }
+  button.primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  select {
+    font: inherit;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+  }
+  .banner {
+    border: 1px solid #2a3548;
+    background: #16202f;
+    color: var(--muted);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg {
+    display: flex;
+    flex-direction: column;
+    max-width: 88%;
+  }
+  .msg[data-role="user"] {
+    align-self: flex-end;
+    align-items: flex-end;
+  }
+  .msg[data-role="assistant"] {
+    align-self: flex-start;
+    align-items: flex-start;
+  }
+  .msg-role {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .msg-content {
+    padding: 10px 13px;
+    border-radius: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg[data-role="user"] .msg-content {
+    background: var(--user-bubble);
+    color: #fff;
+    border-bottom-right-radius: 3px;
+  }
+  .msg[data-role="assistant"] .msg-content {
+    background: var(--assistant-bubble);
+    border-bottom-left-radius: 3px;
+  }
+  .msg[data-status="streaming"] .msg-content::after {
+    content: "▍";
+    animation: blink 1s step-start infinite;
+    opacity: 0.8;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .msg-content pre {
+    background: #0c1420;
+    border: 1px solid #263349;
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .msg-content code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+  }
+  .msg-content p {
+    margin: 0 0 6px;
+  }
+  .msg-content p:last-child {
+    margin-bottom: 0;
+  }
+  footer {
+    margin-top: 12px;
+  }
+  .composer-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  #composer {
+    flex: 1;
+    resize: none;
+    min-height: 44px;
+    max-height: 160px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #0f1722;
+    color: var(--text);
+    padding: 10px 12px;
+    font: inherit;
+  }
+  #composer:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <h1>Mock Chat</h1>
+      <div class="sub">Offline stand-in for Copilot Chat — for testing Local Context Bridge end-to-end.</div>
+    </div>
+    <div class="toolbar">
+      <div id="conversation-id" data-conversation-id="">Conversation: <code class="conv-code"></code></div>
+      <button id="new-conversation" type="button">New conversation</button>
+    </div>
+  </header>
+
+  <div class="banner">
+    Pick a scenario below, then send any message. The assistant's reply will include a
+    <code>local-tool-request</code> block for the chosen tool so you can test the extension's detection,
+    execution, and result-insertion flow without a real Copilot account.
+  </div>
+
+  <div class="toolbar" style="margin-bottom: 10px">
+    <label for="scenario" style="color: var(--muted); font-size: 12px">Next reply requests:</label>
+    <select id="scenario">
+      <option value="none">No tool (plain reply)</option>
+      <option value="project_info">project_info</option>
+      <option value="list_files">list_files</option>
+      <option value="find_files">find_files</option>
+      <option value="directory_summary">directory_summary</option>
+      <option value="search_text" selected>search_text</option>
+      <option value="read_file">read_file</option>
+    </select>
+  </div>
+
+  <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+
+  <footer>
+    <div class="composer-row">
+      <textarea id="composer" placeholder="Type a message… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send-btn" class="primary" type="button">Send</button>
+    </div>
+    <div class="hint">This page runs entirely client-side; nothing you type here leaves your machine.</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var messagesEl = document.getElementById('messages');
+  var composerEl = document.getElementById('composer');
+  var sendBtn = document.getElementById('send-btn');
+  var scenarioEl = document.getElementById('scenario');
+  var conversationIdEl = document.getElementById('conversation-id');
+  var conversationCodeEl = conversationIdEl.querySelector('.conv-code');
+  var newConversationBtn = document.getElementById('new-conversation');
+
+  var STORAGE_KEY = 'local-context-bridge:mock-chat:conversation-id';
+  var msgCounter = 0;
+
+  function newId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    return 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  }
+
+  function setConversationId(id) {
+    conversationIdEl.dataset.conversationId = id;
+    conversationCodeEl.textContent = id;
+    try { sessionStorage.setItem(STORAGE_KEY, id); } catch (e) { /* ignore */ }
+  }
+
+  function restoreOrCreateConversationId() {
+    var existing = null;
+    try { existing = sessionStorage.getItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+    setConversationId(existing || newId());
+  }
+
+  function escapeHtml(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Very small renderer: turns ```lang\n...\n``` fenced blocks into <pre><code>,
+   * and leaves everything else as plain escaped text with paragraph breaks.
+   * Good enough for a mock chat; not a general markdown implementation.
+   */
+  function renderContent(text) {
+    var parts = text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
+    var html = '';
+    for (var i = 0; i < parts.length; i += 3) {
+      var plain = parts[i] || '';
+      if (plain.trim().length > 0) {
+        var paragraphs = plain.split(/\n{2,}/).map(function (p) {
+          return '<p>' + escapeHtml(p).replace(/\n/g, '<br/>') + '</p>';
+        });
+        html += paragraphs.join('');
+      }
+      var lang = parts[i + 1];
+      var code = parts[i + 2];
+      if (code !== undefined) {
+        html += '<pre><code data-lang="' + escapeHtml(lang || '') + '">' + escapeHtml(code) + '</code></pre>';
+      }
+    }
+    return html || escapeHtml(text);
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function appendMessage(role, initialText, status) {
+    msgCounter += 1;
+    var id = 'm' + Date.now() + '-' + msgCounter;
+    var el = document.createElement('div');
+    el.className = 'msg';
+    el.dataset.role = role;
+    el.dataset.msgId = id;
+    el.dataset.status = status || 'complete';
+
+    var roleLabel = document.createElement('div');
+    roleLabel.className = 'msg-role';
+    roleLabel.textContent = role === 'user' ? 'You' : 'Assistant';
+    el.appendChild(roleLabel);
+
+    var content = document.createElement('div');
+    content.className = 'msg-content';
+    content.innerHTML = renderContent(initialText || '');
+    el.appendChild(content);
+
+    messagesEl.appendChild(el);
+    scrollToBottom();
+    return { el: el, content: content };
+  }
+
+  function setMessageText(handle, text, status) {
+    handle.content.innerHTML = renderContent(text);
+    if (status) handle.el.dataset.status = status;
+    scrollToBottom();
+  }
+
+  var DEFAULT_ROOT_ALIAS = 'local-context-bridge';
+
+  var TOOL_ARGUMENTS = {
+    project_info: {},
+    list_files: { rootAlias: DEFAULT_ROOT_ALIAS, path: '.' },
+    find_files: { rootAlias: DEFAULT_ROOT_ALIAS, pattern: '*.ts' },
+    directory_summary: { rootAlias: DEFAULT_ROOT_ALIAS, path: 'src', maxDepth: 2 },
+    search_text: { rootAlias: DEFAULT_ROOT_ALIAS, query: 'TODO', path: 'src', maxResults: 20 },
+    read_file: { rootAlias: DEFAULT_ROOT_ALIAS, path: 'README.md', startLine: 1, endLine: 60 },
+  };
+
+  var TOOL_INTROS = {
+    project_info: "Let me check some high-level details about this project first.",
+    list_files: "Let me see what's in that directory.",
+    find_files: "Let me search for files matching that pattern.",
+    directory_summary: "Let me summarize that part of the tree.",
+    search_text: "Let me search the codebase for that.",
+    read_file: "Let me take a look at that file.",
+  };
+
+  function buildToolRequestReply(tool) {
+    var request = {
+      protocolVersion: '1.0',
+      type: 'LOCAL_TOOL_REQUEST',
+      id: 'req-' + newId(),
+      tool: tool,
+      arguments: TOOL_ARGUMENTS[tool] || {},
+    };
+    var fence = '```local-tool-request\n' + JSON.stringify(request, null, 2) + '\n```';
+    return (TOOL_INTROS[tool] || 'Let me check that.') + '\n\n' + fence;
+  }
+
+  function containsResultFence(text) {
+    return /```local-tool-result\b/.test(text);
+  }
+
+  function buildAssistantReply(userText) {
+    if (containsResultFence(userText)) {
+      return "Thanks, I received the result. Let me know if you'd like me to look at anything else.";
+    }
+    var scenario = scenarioEl.value;
+    if (scenario === 'none') {
+      return "Got it — let me know if you'd like me to look something up in the project.";
+    }
+    return buildToolRequestReply(scenario);
+  }
+
+  function streamAssistantReply(fullText) {
+    var handle = appendMessage('assistant', '', 'streaming');
+    var revealed = 0;
+    // Stream in small chunks so behaviour is visibly "streaming" without being slow to test with.
+    var chunkSize = Math.max(2, Math.round(fullText.length / 40));
+    var timer = setInterval(function () {
+      revealed = Math.min(fullText.length, revealed + chunkSize);
+      setMessageText(handle, fullText.slice(0, revealed), 'streaming');
+      if (revealed >= fullText.length) {
+        clearInterval(timer);
+        setMessageText(handle, fullText, 'complete');
+      }
+    }, 30);
+  }
+
+  function sendMessage() {
+    var text = composerEl.value.trim();
+    if (!text) return;
+    appendMessage('user', text, 'complete');
+    composerEl.value = '';
+    composerEl.style.height = '';
+    var reply = buildAssistantReply(text);
+    setTimeout(function () { streamAssistantReply(reply); }, 250);
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  composerEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+  composerEl.addEventListener('input', function () {
+    composerEl.style.height = '';
+    composerEl.style.height = Math.min(160, composerEl.scrollHeight) + 'px';
+  });
+
+  newConversationBtn.addEventListener('click', function () {
+    messagesEl.innerHTML = '';
+    setConversationId(newId());
+  });
+
+  restoreOrCreateConversationId();
+  appendMessage(
+    'assistant',
+    'Hi! This is the Local Context Bridge mock chat. Pick a scenario above and send a message to see a simulated tool request.',
+    'complete',
+  );
+})();
+</script>
+</body>
+</html>

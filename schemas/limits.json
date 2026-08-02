@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "defaultPort": 32178,
+  "limits": {
+    "maxIterations": 0,
+    "maxSessionMinutes": 0,
+    "maxRequestBytes": 32768,
+    "maxResultBytes": 131072,
+    "maxReadLines": 300,
+    "maxTextFileBytes": 2097152,
+    "maxSearchFiles": 5000,
+    "maxSearchResults": 100,
+    "maxConcurrentRequests": 1,
+    "toolTimeoutSeconds": 60,
+    "minCallIntervalMs": 500,
+    "messageStableMs": 1500
+  },
+  "tools": [
+    "project_info",
+    "list_files",
+    "find_files",
+    "directory_summary",
+    "search_text",
+    "read_file"
+  ],
+  "defaultCopilotOrigins": [
+    "https://m365.cloud.microsoft/*",
+    "https://copilot.microsoft.com/*"
+  ]
+}

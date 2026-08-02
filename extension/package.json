@@ -1,0 +1,46 @@
+{
+  "name": "local-context-bridge-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local Context Bridge - Chromium MV3 extension that bridges browser-based AI chat assistants to a local, read-only project context companion.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --config vite.config.ts --watch",
+    "build": "npm run typecheck && npm run build:icons && npm run build:ui && npm run build:background && npm run build:content && npm run build:copy",
+    "build:ui": "vite build --config vite.config.ts",
+    "build:background": "vite build --config vite.config.background.ts",
+    "build:content": "vite build --config vite.config.content.ts",
+    "build:copy": "node scripts/copy-static.mjs",
+    "build:icons": "node scripts/generate-icons.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^26.1.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react": "^7.37.3",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "jsdom": "^25.0.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.19.1",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}

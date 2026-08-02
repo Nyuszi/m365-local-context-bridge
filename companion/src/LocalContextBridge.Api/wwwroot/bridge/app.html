@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Local Context Bridge</title>
+  <link rel="stylesheet" href="/bridge/styles.css"/>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <h1>Local Context Bridge</h1>
+      <p class="muted">Desktop status</p>
+    </div>
+    <div class="theme-switch">
+      <button type="button" data-theme-set="system">Auto</button>
+      <button type="button" data-theme-set="light">Light</button>
+      <button type="button" data-theme-set="dark">Dark</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Running</h2>
+    <p class="status" id="runStatus"><span class="dot" id="runDot"></span>Checking…</p>
+    <p class="muted" id="runDetail"></p>
+    <div class="row">
+      <button class="secondary" id="openCopilot" type="button">Open Copilot</button>
+      <a class="btn link" href="/setup">Setup</a>
+      <a class="btn link" href="/local">Advanced</a>
+    </div>
+    <p class="note" id="hint"></p>
+  </div>
+
+  <div class="card start-card">
+    <h2>New session</h2>
+    <p class="muted start-lead">Pick a folder and mode, then start in Copilot.</p>
+
+    <label class="field" for="alias">Folder / alias</label>
+    <div class="folder-row">
+      <input id="alias" type="text" placeholder="project" autocomplete="off"/>
+      <button class="secondary" id="pickFolder" type="button">Choose folder…</button>
+    </div>
+    <p class="status" id="folderStatus">No folder selected yet.</p>
+
+    <h2 class="subhead">Mode</h2>
+    <div class="modes">
+      <label>
+        <input type="radio" name="mode" value="manual"/>
+        <span class="mode-copy"><strong>Manual</strong> — confirm every tool and insert</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="assisted" checked/>
+        <span class="mode-copy"><strong>Assisted</strong> — confirm tools; auto-insert</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="automatic"/>
+        <span class="mode-copy"><strong>Automatic</strong> — hands-off</span>
+      </label>
+    </div>
+
+    <button class="start-btn" id="startBtn" type="button">
+      <span class="start-btn-label">START</span>
+      <span class="start-btn-sub">Open Copilot &amp; begin</span>
+    </button>
+    <p class="status" id="startStatus"></p>
+  </div>
+
+  <div class="card">
+    <h2>Previous sessions</h2>
+    <p class="muted">Open a saved Copilot chat, or start a new one if the old link is missing.</p>
+    <div class="session-list" id="sessionList"></div>
+  </div>
+</main>
+<script src="/bridge/common.js"></script>
+<script>
+const { fetchJson, aliasFromPath, wireThemeSwitch } = BridgeUI;
+wireThemeSwitch();
+
+const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
+let latestSessions = [];
+let currentPath = '';
+
+function selectedMode() {
+  const el = document.querySelector('input[name=mode]:checked');
+  return el ? el.value : 'assisted';
+}
+
+function fmtTime(iso) {
+  try {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
+    return d.toLocaleString();
+  } catch {
+    return '';
+  }
+}
+
+function sessionLabel(s) {
+  return s.title || s.projectAlias || s.chatId || 'Untitled session';
+}
+
+function isResumable(s) {
+  if (Boolean(s.resumable)) return true;
+  if (typeof s.copilotUrl !== 'string') return false;
+  if (/\/chat\/conversation\/[0-9a-f-]{8,}/i.test(s.copilotUrl)) return true;
+  if (!/conversationId=|threadId=/i.test(s.copilotUrl)) return false;
+  return !/conversationId=conversation\b/i.test(s.copilotUrl);
+}
+
+async function saveMode() {
+  await fetchJson('/api/v1/local/preferences', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ defaultMode: selectedMode() }),
+  });
+}
+
+document.querySelectorAll('input[name=mode]').forEach((r) =>
+  r.addEventListener('change', () => {
+    saveMode().catch(() => {});
+  }),
+);
+
+async function applySessionPrefs(session) {
+  if (!session) return;
+  if (session.mode) {
+    await fetchJson('/api/v1/local/preferences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultMode: session.mode }),
+    });
+  }
+}
+
+async function deleteSession(chatId) {
+  if (!chatId) return;
+  await fetchJson(`/api/v1/local/chat-sessions/${encodeURIComponent(chatId)}`, {
+    method: 'DELETE',
+  });
+}
+
+async function startNewSession() {
+  const status = document.getElementById('startStatus');
+  const btn = document.getElementById('startBtn');
+  const alias = document.getElementById('alias').value.trim();
+  btn.disabled = true;
+  btn.classList.add('starting');
+  status.textContent = 'Starting…';
+  status.className = 'status';
+  try {
+    await saveMode();
+    if (!alias && !currentPath) {
+      throw new Error('Choose a project folder first.');
+    }
+    if (currentPath && alias) {
+      await fetchJson('/api/v1/local/register-root', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentPath, alias, primary: true }),
+      }).catch(() => {});
+    }
+    await fetchJson('/api/v1/local/start-in-copilot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: selectedMode(),
+        rootAlias: alias || undefined,
+        explore: true,
+      }),
+    });
+    status.textContent = 'Copilot opening — setup continues there (waits for chat link).';
+    status.className = 'status ok';
+    setTimeout(() => refresh(), 800);
+  } catch (e) {
+    status.textContent = e.message || 'Could not start';
+    status.className = 'status err';
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('starting');
+  }
+}
+
+/** Dead / unlinked session → confirm → delete → start with current folder/mode. */
+async function offerNewChatInstead(session) {
+  const label = sessionLabel(session);
+  const ok = window.confirm(
+    `"${label}" is not available to resume.\n\n` +
+      'Start a new chat with the current folder and mode settings?',
+  );
+  if (!ok) return;
+  try {
+    await deleteSession(session.chatId);
+  } catch {
+    /* still offer a new start even if delete fails */
+  }
+  if (session.projectAlias) {
+    document.getElementById('alias').value = session.projectAlias;
+  }
+  if (session.mode) {
+    const radio = document.querySelector(`input[name=mode][value="${session.mode}"]`);
+    if (radio) radio.checked = true;
+  }
+  await startNewSession();
+}
+
+async function openSession(session) {
+  if (!session) return;
+  if (!isResumable(session)) {
+    await offerNewChatInstead(session);
+    return;
+  }
+  await applySessionPrefs(session);
+  window.open(session.copilotUrl, '_blank');
+}
+
+async function refresh() {
+  const runStatus = document.getElementById('runStatus');
+  const runDetail = document.getElementById('runDetail');
+  const hint = document.getElementById('hint');
+  const folderStatus = document.getElementById('folderStatus');
+  const startBtn = document.getElementById('startBtn');
+
+  try {
+    const health = await fetchJson('/health');
+    runStatus.innerHTML = '<span class="dot on"></span>Companion running';
+    runStatus.className = 'status ok';
+    runDetail.textContent = `v${health.version}`;
+
+    const state = await fetchJson('/api/v1/local/setup-state');
+    if (state.defaultMode) {
+      const radio = document.querySelector(`input[name=mode][value="${state.defaultMode}"]`);
+      if (radio) radio.checked = true;
+    }
+    if (state.primaryPath) {
+      currentPath = state.primaryPath;
+      document.getElementById('alias').value = state.primaryAlias || aliasFromPath(state.primaryPath);
+      folderStatus.textContent = `${state.primaryAlias} — ${state.primaryPath}`;
+      folderStatus.className = 'status ok';
+    } else {
+      folderStatus.textContent = 'No folder selected yet.';
+      folderStatus.className = 'status warn';
+    }
+
+    const ext = state.extensionInstalled
+      ? 'Extension connected'
+      : 'Extension not detected — open Setup if needed';
+    hint.textContent = ext;
+    startBtn.disabled = false;
+  } catch {
+    runStatus.innerHTML = '<span class="dot"></span>Companion offline';
+    runStatus.className = 'status err';
+    runDetail.textContent = 'Open Local Context Bridge.app to start.';
+    hint.textContent = '';
+    startBtn.disabled = true;
+  }
+
+  try {
+    const sessions = (await fetchJson('/api/v1/local/chat-sessions')).filter(
+      (s) => s && s.chatId,
+    );
+    latestSessions = sessions;
+    const list = document.getElementById('sessionList');
+    if (!sessions.length) {
+      list.innerHTML = '<p class="muted">No saved sessions yet. Choose a folder, mode, then START.</p>';
+      return;
+    }
+    list.innerHTML = sessions
+      .map((s) => {
+        const when = fmtTime(s.lastActiveAt);
+        const linked = isResumable(s);
+        const pillLabel = linked ? s.mode || 'assisted' : 'unavailable';
+        return `<div class="session-item" data-id="${encodeURIComponent(s.chatId)}">
+          <div class="meta">
+            <div class="title">${escapeHtml(sessionLabel(s))}</div>
+            <div class="sub">${escapeHtml(s.projectAlias || 'project')} · <span class="pill">${escapeHtml(pillLabel)}</span>${when ? ` · ${escapeHtml(when)}` : ''}</div>
+          </div>
+          <button class="secondary resume" type="button">${linked ? 'Open' : 'New chat…'}</button>
+        </div>`;
+      })
+      .join('');
+    list.querySelectorAll('.session-item').forEach((row) => {
+      row.querySelector('.resume').onclick = () => {
+        const id = decodeURIComponent(row.getAttribute('data-id'));
+        const s = sessions.find((x) => x.chatId === id);
+        void openSession(s);
+      };
+    });
+  } catch {
+    document.getElementById('sessionList').innerHTML =
+      '<p class="muted">Could not load sessions.</p>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+document.getElementById('openCopilot').onclick = async () => {
+  const linked = latestSessions.find((s) => isResumable(s));
+  if (linked) {
+    await openSession(linked);
+    return;
+  }
+  window.open(COPILOT_URL, '_blank');
+};
+
+document.getElementById('pickFolder').onclick = async () => {
+  const status = document.getElementById('folderStatus');
+  status.textContent = 'Opening folder picker…';
+  status.className = 'status';
+  try {
+    const j = await fetchJson('/api/v1/local/pick-folder', { method: 'POST' });
+    const path = j.path;
+    const alias = aliasFromPath(path);
+    document.getElementById('alias').value = alias;
+    currentPath = path;
+    await fetchJson('/api/v1/local/register-root', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, alias, primary: true }),
+    });
+    status.textContent = `${alias} — ${path}`;
+    status.className = 'status ok';
+  } catch (e) {
+    status.textContent = e.message || 'Cancelled';
+    status.className = 'status err';
+  }
+};
+
+document.getElementById('startBtn').onclick = () => {
+  void startNewSession();
+};
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

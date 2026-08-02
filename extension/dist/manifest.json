@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "Local Context Bridge",
+  "short_name": "Context Bridge",
+  "version": "0.1.0",
+  "description": "Bridge a browser-based AI chat assistant to a local, read-only project context companion you run and control.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Local Context Bridge",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "scripting",
+    "tabs",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:32178/*"
+  ],
+  "optional_host_permissions": [
+    "https://m365.cloud.microsoft/*",
+    "https://copilot.microsoft.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1:32178/mock-chat*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://m365.cloud.microsoft/*",
+        "https://copilot.microsoft.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'"
+  },
+  "minimum_chrome_version": "114",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu0Xa/zDZ/vl9B18/GtBAeDu0y2R0O+qqghq9N/kXdNsyhB/s1X17TNEB2OAUPv4jB4kaaltEcexr/nwrQq1qdgx8L43E0uDcWq84GhyNIa4HUSyhxFSwr+/YLKtGP/70j1v+Szn4RTAsI6urvO5YuccDnp9B/g40GKeJOL++cxcRFewfnsANrLBs29U6Nc/8nUdz0f39wH8YPtNA3N1jv83GjLBeUPJyTlB0ytzlbrI+MFNklUIN52Yqf9VDpNumIPQ++hmft/Rzhb+jrW3JXT8cCTLZxkRO8s6eiTrZdclUjLEstu2fhVFe0QyFEnHBJmanwuhnihwrPTWBgBsi5QIDAQAB"
+}

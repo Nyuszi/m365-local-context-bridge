@@ -1,0 +1,54 @@
+# Node
+node_modules/
+extension/dist-zip/
+*.log
+.npm
+.DS_Store
+
+# Keep extension/dist tracked so Load unpacked works after clone
+# (rebuild with: cd extension && npm ci && npm run build)
+
+# .NET
+bin/
+obj/
+**/[Bb]in/
+**/[Oo]bj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.trx
+companion/.dotnet/
+.dotnet/
+
+# Published binaries (rebuild with ./scripts/sync-native.sh [--app])
+native/macos-arm64/
+native/macos-x64/
+packaging/out/
+release/
+local-context-bridge-*/
+
+# Runtime / local
+data/
+*.pid
+.env
+.env.local
+logs/
+.bridge/
+.bridge-test-data/
+**/Library/Application Support/
+companion/Library/
+
+# Secrets / signing material — never commit
+*.pem
+*.p12
+native/macos-app/extension-signing.pem
+native/macos-app/extension-key.txt
+native/macos-app/*.crx
+native/macos-app/*.zip
+
+# IDE / editor
+.idea/
+.vscode/
+.cursor/
+*.swp
